@@ -1,0 +1,30 @@
+[package]
+name = "map-stages"
+description = "Reference stage implementations: structural/BM25, model-api, fusion."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The llm classifier is an optional plugin: it talks to an LLM via
+# the orthogonal map-llm adapter. The offline stages pull none of it.
+[features]
+default = []
+llm = ["dep:map-llm"]
+
+[dependencies]
+getrandom = "0.2"
+ignore = "0.4.30"
+map-core = { version = "0.0.0", path = "../map-core" }
+map-format = { version = "0.0.0", path = "../map-format" }
+map-llm = { version = "0.0.0", path = "../map-llm", optional = true }
+memmap2 = "0.9.11"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.19"
+unicode-normalization = "0.1.25"

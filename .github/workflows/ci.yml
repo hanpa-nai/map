@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+# Third-party actions are pinned to a full commit SHA, not a tag. `@v2` and
+# `@v4` are mutable branches: whoever can move them decides what runs here,
+# with this workflow's GITHUB_TOKEN. A SHA is immutable, so an upstream
+# force-push or a compromised account cannot reach us silently. The trailing
+# comment is what Dependabot reads and rewrites when it proposes an update —
+# see .github/dependabot.yml, without which these pins would simply rot.
+#
+# This is the same posture spec/format-v1.md §8 takes toward a committed
+# index: provenance is the control, not trust in a name.
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install toolchain
+        run: rustup show  # honours rust-toolchain.toml
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: Test
+        run: cargo test --workspace
+
+      # The default build omits `distilled` and `llm`, so without this the
+      # optional plugin code and roughly twenty of its tests never compile in
+      # CI. Compile-only: the dense tests that need the potion weights cannot
+      # run here, but nothing else guards this code from bit-rotting.
+      - name: Clippy (all features)
+        run: cargo clippy --workspace --all-targets --all-features
+
+  msrv:
+    # The version is deliberately NOT interpolated into this name. The `env`
+    # context is not available when `jobs.<id>.name` is evaluated — only
+    # `github`, `needs`, `strategy`, `matrix`, `vars` and `inputs` are — so
+    # `name: msrv ${{ env.MSRV }}` is a workflow-file validation error. It does
+    # not fail this job: it fails the whole FILE, so no job runs at all and the
+    # run reports zero jobs. That is what shipped on 2026-07-31 and it left CI
+    # dead for thirteen commits while every push showed a red X that looked
+    # like a test failure. Step-level `name:` and `run:` do get `env`, which is
+    # why the interpolation below is fine.
+    name: msrv
+    runs-on: ubuntu-latest
+    env:
+      # Keep in step with `rust-version` in the workspace Cargo.toml.
+      MSRV: "1.88"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # `rust-toolchain.toml` pins stable, which a `+toolchain` argument
+      # overrides. Without this job the declared `rust-version` is a claim
+      # nothing checks, and CI would keep testing only the newest stable.
+      - name: Install ${{ env.MSRV }}
+        run: rustup toolchain install ${{ env.MSRV }} --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Check
+        run: cargo +${{ env.MSRV }} check --workspace --all-targets --all-features
+
+  audit:
+    name: supply chain
+    runs-on: ubuntu-latest
+    # `rustsec/audit-check` publishes findings through the Checks API, so it
+    # needs `checks: write`; without it the first API call throws and the job
+    # fails for a reason unrelated to the audit. Granted per-job so the build
+    # and test jobs keep the read-only default.
+    #
+    # The action only *fails* on critical vulnerabilities — anything else is
+    # published as a passing check. This grant is what lets a finding be
+    # reported, not a way of hiding one.
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Pinned to the released tag. `main` carries an unreleased Node 24 bump
+      # that would silence this job's deprecation notice, but running untagged
+      # code on the job whose purpose is supply-chain assurance is the wrong
+      # trade; the notice is cosmetic, since GitHub already runs the action on
+      # Node 24. Dependabot delivers the fix once it is released.
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

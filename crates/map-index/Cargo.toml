@@ -1,0 +1,40 @@
+[package]
+name = "map-index"
+description = "Offline indexer driver: discover through fabricate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Optional plugins. Without them the indexer builds the lexical dimensions only
+# and skips any configured dense or LLM dimension.
+[features]
+default = []
+# `map-query` is a dev-dependency, and the feature is forwarded to it so the
+# ledger's cluster-resolution test can open an index whose dimension declares an
+# embedder. Without it `Index::open` returns `EmbedderUnavailable` and the check
+# cannot run at all.
+distilled = ["dep:map-embed", "map-embed/distilled", "map-query/distilled"]
+# Indexing never downloads. This exists only so the remedy text for a missing
+# model can name `map model fetch` when that command is present, and say
+# "place it at …" when it is not.
+auto-distilled = ["distilled", "map-embed/auto-distilled"]
+llm = ["map-stages/llm", "dep:map-llm"]
+
+[dependencies]
+map-core = { version = "0.0.0", path = "../map-core" }
+map-format = { version = "0.0.0", path = "../map-format" }
+map-stages = { version = "0.0.0", path = "../map-stages" }
+map-embed = { version = "0.0.0", path = "../map-embed", optional = true }
+map-llm = { version = "0.0.0", path = "../map-llm", optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.19"
+
+[dev-dependencies]
+map-query = { path = "../map-query" }

@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+# Set by `ignore`, the highest floor in the tree, and verified by the `msrv`
+# job in CI rather than asserted here.
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/hanpa-nai/map"
+authors = ["MAP contributors"]
+
+# Nothing here is ready for crates.io while the format spec is DRAFT, and a
+# stray `cargo publish` would squat nine names on a format that has not
+# frozen. Each crate opts in with `publish.workspace = true`; workspace fields
+# are not inherited otherwise. Lift per crate when one is ready to release.
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Determinism (Tier A) note: HashMap/HashSet iteration order is randomized and
+# must never feed serialized output. Use BTreeMap/BTreeSet or sort explicitly
+# before writing. No lint can distinguish output paths from internal use, so
+# this is enforced empirically by the run-twice byte-identity test in CI.
+# See spec/format-v1.md "Determinism tiers".
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
