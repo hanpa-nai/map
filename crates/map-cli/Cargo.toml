@@ -17,8 +17,8 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
-# `distilled` turns on the optional dense embedder plugin end to end. The
-# default `map` binary is lexical-only and carries no model.
+# `distilled` turns on the optional embedder plugin end to end. The default
+# `map` binary has the `lexical` and `declaration` dimensions and no embedder.
 [features]
 default = []
 distilled = ["map-index/distilled", "map-query/distilled"]
@@ -34,10 +34,10 @@ llm = ["map-index/llm", "dep:map-llm"]
 
 [dependencies]
 clap = { version = "4.5.61", features = ["derive"] }
-map-core = { version = "0.0.0", path = "../map-core" }
-map-embed = { version = "0.0.0", path = "../map-embed", optional = true }
-map-format = { version = "0.0.0", path = "../map-format" }
-map-index = { version = "0.0.0", path = "../map-index" }
-map-llm = { version = "0.0.0", path = "../map-llm", optional = true }
-map-query = { version = "0.0.0", path = "../map-query" }
+map-core = { version = "0.0.1", path = "../map-core" }
+map-embed = { version = "0.0.1", path = "../map-embed", optional = true }
+map-format = { version = "0.0.1", path = "../map-format" }
+map-index = { version = "0.0.1", path = "../map-index" }
+map-llm = { version = "0.0.1", path = "../map-llm", optional = true }
+map-query = { version = "0.0.1", path = "../map-query" }
 thiserror = "2.0.19"

@@ -2,7 +2,7 @@
 
 Fusion happens at query time over already-stored scores, so a weight sweep costs
 no reindex and no LLM call — it is the only genuinely free knob in the system.
-That cheapness is also the trap: 125 combinations against 41 scored queries will
+That cheapness is also the trap: 56 combinations against 41 scored queries will
 find something that flatters the set. So the sweep runs on half the queries and
 the winner is reported on the other half, and both numbers are printed.
 

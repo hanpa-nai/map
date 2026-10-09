@@ -2,8 +2,7 @@
 //!
 //! Built for a fast edit-and-see-the-number loop: it loads the index once,
 //! queries in-process rather than shelling out per query, and prints a compact
-//! table. Heavier end-to-end proof with task agents is a separate exercise;
-//! this exists so a change to a stage can be priced in seconds.
+//! table. It exists so a change to a stage can be priced in seconds.
 //!
 //! ```text
 //! map-eval ../ripgrep --corpus eval/corpora/ripgrep-8372866

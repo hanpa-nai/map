@@ -11,8 +11,8 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# The distilled embedder is an OPTIONAL plugin. The free, zero-config install is
-# lexical-only and builds with `default = []`: no tokenizer, no safetensors
+# The distilled embedder is an OPTIONAL plugin. The default install has no
+# embedder and builds with `default = []`: no tokenizer, no safetensors
 # reader, none of the weight-loading tree. The `distilled` feature adds the
 # real-weights loader; all three deps it pulls are pure-Rust (tokenizers with
 # onig disabled, since the BGE tokenizer is Bert*-only and needs no regex
@@ -26,8 +26,8 @@ distilled = ["dep:tokenizers", "dep:safetensors", "dep:serde", "dep:serde_json"]
 auto-distilled = ["distilled", "dep:ureq", "dep:sha2", "dep:thiserror"]
 
 [dependencies]
-map-core = { version = "0.0.0", path = "../map-core" }
-map-format = { version = "0.0.0", path = "../map-format" }
+map-core = { version = "0.0.1", path = "../map-core" }
+map-format = { version = "0.0.1", path = "../map-format" }
 
 # fancy-regex is the pure-Rust regex backend; the alternative (onig) is native
 # C and ruled out by MAP's no-native-libs decision. The BGE tokenizer is

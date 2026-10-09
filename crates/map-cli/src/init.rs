@@ -4,8 +4,8 @@
 //! (structural classification plus BM25) and `declaration` (the names a
 //! segment declares, also scored by BM25). Neither needs an API key, network,
 //! or model download, so `map init && map index && map find` succeeds on a
-//! fresh machine with nothing configured. Semantic dimensions are emitted
-//! commented out, one edit away.
+//! fresh machine with nothing configured. The embedding dimensions are
+//! emitted commented out, one edit away.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,48 +21,47 @@ use map_format::{Config, Manifest};
 /// cannot drift.
 const CONFIG_TEMPLATE: &str = r##"# .map/config.toml
 #
-# This file is committed. It is the input the index is built from, so editing
-# a dimension changes its fingerprint and invalidates exactly the objects that
-# dimension produced -- no more, and no less than has to be recomputed.
+# You commit this file. MAP builds the index from it. Thus an edit to a
+# dimension changes its fingerprint, and MAP builds only the objects of that
+# dimension again.
 
 version = 1
 
-# Nothing updates the index on its own. `map find` never does -- pass -u when
-# you want it to, since a configured dense dimension can make an update slow
-# and a query should not surprise you with one. An interactive `map find` tells
-# you when the index has drifted; that notice is suppressed for non-interactive
-# callers, where it would just be noise in a model's context.
+# No operation updates the index automatically. `map find` updates it only when
+# you use `-u`, because an embedding dimension or an LLM dimension can make an
+# update slow. An interactive `map find` tells you when the index is stale. A
+# run with no terminal does not print that notice, because the notice does not
+# help a model.
 
 [storage]
-# How much derived data enters the repository, and where it lives.
+# The quantity of derived data in the repository, and its location.
 #
-# Only the values written below are implemented. The others are defined in the
-# format but not yet honoured by the writer, so setting one is an error rather
-# than a setting that quietly does nothing:
+# MAP implements only the two values in this section. It rejects the other
+# values of the format:
 #
 #   commit    binary | descriptors-only | none   not implemented
-#   location  ref (an orphan ref, out of the tree)  not implemented
+#   location  ref (a ref with no parent, not in the tree)  not implemented
 commit = "full"
 location = "working-tree"
 
 # ---------------------------------------------------------------------------
-# Segmentation
+# Segmenter
 #
-# How a resource is cut up before any dimension sees it. Shared by every
-# dimension on purpose: segment identity is the join key that makes a hit in
-# one dimension comparable to a hit in another.
+# The segmenter cuts each resource into segments before a dimension reads it.
+# All dimensions use the same segments. The segment identity connects a hit in
+# one dimension to a hit in a different dimension.
 #
-# Line windows are the only implementation. They are deliberately
-# structure-blind -- cutting on syntax would need a grammar per format, and this
-# has to run on whatever text a root holds. The cost is that a boundary falls
-# where the line count lands rather than at a natural seam, which is what
-# `overlap` is for.
+# Line windows are the only implementation. They do not use the structure of
+# the text. A cut by syntax uses a grammar for each format, and MAP must run on
+# all text in a root. Thus the edge of a segment is at a line count, not at a
+# point that the content gives. The `overlap` setting decreases the effect of
+# this.
 #
-# The defaults below were measured on source code. Prose, transcripts and
-# exported records have different natural units, and nothing here knows which
-# you have -- so treat them as a starting point, and change them by measuring
-# rather than by reasoning. Editing them re-segments the corpus, which re-keys
-# every object derived from it.
+# The author measured the defaults on source code. Prose, transcripts, and
+# records from other systems have different units, and MAP does not know which
+# type you have. Use the defaults as a start, and measure before you change
+# them. A change cuts the corpus again, and it gives new keys to all objects
+# that come from the segments.
 #
 # [segmenter]
 # impl    = "window"
@@ -72,22 +71,20 @@ location = "working-tree"
 # ---------------------------------------------------------------------------
 # Dimensions
 #
-# A dimension is one field of the query the model fills in. Its `description`
-# is what the model reads when deciding what to put there, so write it for
-# that audience rather than as internal documentation.
+# A dimension is one field of the query, and the model writes text in it. The
+# model reads the `description` to select the text for the field. Write the
+# description for the model, not as documentation for a person.
 #
-# The descriptions below are written for a root of unspecified content, because
-# that is all a fresh `map init` can know. If your root holds one kind of thing
-# -- source code, meeting notes, support tickets, a documentation set -- say so
-# here. A description is model-facing prose and is deliberately excluded from
-# the artifact fingerprint, so sharpening one costs nothing and invalidates
-# nothing.
+# The descriptions in this file are for a root with content of an unknown type.
+# If your root contains one type of content, write that type in the
+# description. Examples are source code, notes, tickets, and a documentation
+# set. The artifact fingerprint does not include the description. Thus an edit
+# to a description has no cost and invalidates no objects.
 #
-# Every dimension must produce a descriptor (text), a tensor (numeric), or
-# both. A dimension producing neither is unsearchable and is rejected. Which
-# scorer runs follows from that: BM25 over the descriptor, cosine over the
-# tensor. There is no `scorer` key -- it would be a setting nothing could
-# contradict.
+# Each dimension must make a descriptor (text), a tensor (numeric), or the two.
+# MAP rejects a dimension that makes no payload, because MAP cannot search it.
+# The payload selects the scorer: BM25 for a descriptor, and cosine for a
+# tensor. There is no `scorer` key.
 # ---------------------------------------------------------------------------
 
 [dimensions.lexical]
@@ -95,11 +92,12 @@ description = "Exact words, names, and literals as they appear in the text. Use 
 enabled = true
 classifier = { impl = "structural" }
 
-# Only the names a segment declares (`fn`, `class`, `struct`, `def`, `type`,
-# ...), so a name put here ranks the declaring segment above every segment
-# that merely uses it. BM25 over whole content does the opposite: callers
-# mention a name more often than its one declaration does. Offline, free, and
-# a line scan rather than a parser, so it runs on any text.
+# This dimension contains only the names that a segment declares (`fn`,
+# `class`, `struct`, `def`, `type`, ...). Thus a name in this field ranks the
+# segment that declares it above the segments that only use it. BM25 on full
+# content does the opposite, because the callers contain a name more times than
+# its one declaration does. The classifier is offline and has no cost. It is a
+# line scan, not a parser. Thus it runs on all text.
 [dimensions.declaration]
 description = "The exact name of the thing whose declaration you want -- a function, type, class, module, or constant. A name here ranks the place that declares it above the places that use it."
 enabled = true
@@ -108,41 +106,46 @@ classifier = { impl = "declaration" }
 # ---------------------------------------------------------------------------
 # Embedding dimensions
 #
-# A dimension is named for what the caller puts in that query field, not for the
-# technique behind it: `lexical` takes keywords, `semantic` takes content
-# resembling your target, `descriptive` takes a description of it.
+# The name of a dimension tells you the type of text that the caller puts in
+# that query field. It does not give the method that calculates the score.
+# `lexical` gets keywords. `semantic` gets an example of the content that you
+# want. `descriptive` gets a description of that content.
 #
-# Nothing below is required. The lexical dimension above works offline, with
-# no key and no model download.
+# The dimensions in this part are optional. The `lexical` and `declaration`
+# dimensions are offline, and no key and no model download are necessary for
+# them.
 #
-# `distilled` needs the model in ~/.map/models and a build with
-# --features distilled; build with --features auto-distilled instead and
-# `map model fetch` downloads it. `llm` needs an OpenAI-compatible endpoint
-# and a build with --features llm; run `map llm login` to set it.
-# The connection lives in ~/.map/llm.toml, never here -- this file is committed
-# and a secret must not appear in it.
+# For `distilled`, the model must be in `~/.map/models`, and the binary must
+# have the `distilled` feature. A binary with the `auto-distilled` feature can
+# download the model with `map model fetch`. For `llm`, an endpoint that is
+# compatible with the OpenAI API is necessary, and the binary must have the
+# `llm` feature. Run `map llm login` to set the endpoint.
+# The connection is in `~/.map/llm.toml`. It is not in this file, because you
+# commit this file and it must not contain a secret.
 # ---------------------------------------------------------------------------
 
-# Free and offline: static distilled embeddings of the content itself, no LLM
-# and no key. Matches meaning rather than exact terms.
+# Offline, with no cost: static distilled embeddings of the content, with no
+# LLM and no key. It finds content about the same subject, not only content
+# with the same words.
 #
-# `content` shapes the segment for the embedder and stores nothing --
-# persist_output = false, because the descriptor would be a second copy of the
-# corpus to save a string join.
+# `content` prepares the segment for the embedder and stores no data. With
+# `persist_output = false`, MAP does not store a second copy of the corpus.
 # [dimensions.semantic]
 # description = "Content resembling what you are looking for -- paste or paraphrase the material itself."
 # classifier = { impl = "content", persist_output = false }
 # embedder   = { impl = "distilled" }
 
-# An LLM writes a prose descriptor of each segment, the distilled embedder
-# embeds that prose, and the fabricator clusters it into a labeled tree.
+# An LLM writes a prose descriptor of each segment. The distilled embedder
+# makes an embedding from that prose. The fabricator makes a tree of clusters
+# with labels.
 #
-# The prompt is where a corpus says what it holds. The built-in framing around
-# it says only how many segments there are and what shape to answer in -- it
-# names no subject matter, so an unedited prompt indexes prose and source code
-# on the same terms. Both the prompt and that framing are fingerprinted:
-# changing either re-classifies rather than reusing answers to a question no
-# longer being asked.
+# The prompt tells the model the type of content in the corpus. MAP puts frame
+# text around the prompt. The frame text gives only the number of segments and
+# the shape of the answer. It gives no subject. Thus the default prompt applies
+# the same instructions to prose and to source code.
+#
+# The fingerprint includes the prompt and the frame text. A change to one of
+# them makes MAP classify the corpus again.
 # [dimensions.descriptive]
 # description = "A description of what you are looking for, in your own words -- what it does, what it is about, what happens when it runs."
 # classifier = { impl = "llm", prompts = { "0" = "Describe what this is and what it does, in one concise sentence of plain language.", "1" = "Name the theme these descriptions share, as a short noun phrase." } }
@@ -152,7 +155,8 @@ classifier = { impl = "declaration" }
 
 /// `.map/.gitignore` — everything derived and disposable.
 const GITIGNORE: &str = "\
-# Derived and disposable. Deleting anything here costs time, never information.
+# Derived data. If you delete it, MAP builds it again. That uses time and
+# removes no information.
 cache/
 ";
 
@@ -178,14 +182,15 @@ cache/
 /// attribute at all. So the attribute costs a machine without the driver
 /// nothing and buys every machine with it a resolved merge.
 const GITATTRIBUTES: &str = "\
-# Collapsed in pull request diffs, but still expandable and still diffable.
-# A committed index steers a model's attention; it must remain reviewable.
+# A pull request shows these files closed, and a reviewer can open them.
+# A committed index controls the text that a model reads. Thus it must be
+# possible to read each change in a review.
 index/** linguist-generated=true
 manifest.json linguist-generated=true
 
-# Resolved by `map merge`, registered in local git config by `map init` and
-# `map index`. A machine without it gets git's ordinary text merge, the same
-# as it would with no attribute here.
+# `map merge` resolves this file. `map init` and `map index` add the driver
+# command to the local git configuration. A machine without the driver gets
+# the usual git text merge, the same as with no attribute.
 manifest.json merge=map
 ";
 

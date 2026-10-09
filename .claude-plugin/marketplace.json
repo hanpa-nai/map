@@ -1,0 +1,14 @@
+{
+  "name": "map",
+  "description": "The agent integration for MAP, a search index that a repository commits in `.map/`.",
+  "owner": {
+    "name": "MAP contributors"
+  },
+  "plugins": [
+    {
+      "name": "map",
+      "source": "./integrations/claude-code",
+      "description": "Tells the model when a repository has a MAP index, and how to search the index."
+    }
+  ]
+}

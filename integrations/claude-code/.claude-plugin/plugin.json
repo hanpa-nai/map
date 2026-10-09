@@ -1,0 +1,11 @@
+{
+  "name": "map",
+  "description": "Tells the model when a repository has a MAP index, and how to search the index.",
+  "author": {
+    "name": "MAP contributors"
+  },
+  "homepage": "https://github.com/hanpa-nai/map",
+  "repository": "https://github.com/hanpa-nai/map",
+  "license": "Apache-2.0",
+  "keywords": ["search", "retrieval", "index", "code-search"]
+}

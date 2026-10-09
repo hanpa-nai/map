@@ -1,21 +1,29 @@
 //! The `map` command-line interface.
 //!
 //! The CLI is a first-class frontend, not a wrapper around something else.
-//! Agents that only have shell access get the same capability MCP hosts do,
-//! which is what keeps any one protocol from becoming load-bearing.
+//! An agent that has only shell access gets every capability, which is what
+//! keeps any one protocol from becoming load-bearing.
+//!
+//! The `///` comments on the argument types below are the `--help` text. A
+//! model reads that text as readily as a person does, so it is written in
+//! Simplified Technical English: short active sentences and one word for one
+//! meaning.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
+mod brief;
+mod build_info;
 mod init;
+mod upgrade;
 
 #[derive(Parser)]
 #[command(
     name = "map",
     version,
-    about = "Model Awareness Plane — a portable, composable index of your resources",
+    about = "Model Awareness Plane — a search index that you commit with your resources",
     long_about = None,
 )]
 struct Cli {
@@ -25,118 +33,151 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a .map directory.
+    /// Make a `.map` directory.
     ///
-    /// Enables only the lexical dimension, which works offline with no key,
-    /// no network, and no model download.
+    /// The new index has the `lexical` and `declaration` dimensions. These two
+    /// dimensions are offline. No key, no network, and no model download are
+    /// necessary.
     Init {
-        /// Directory to initialize. Defaults to the current directory.
+        /// The directory in which to make `.map`. Default: the current directory.
         #[arg(default_value = ".")]
         path: PathBuf,
 
-        /// Overwrite an existing .map configuration.
+        /// Overwrite the configuration of a `.map` that is there.
         #[arg(long)]
         force: bool,
     },
 
-    /// Build or refresh the index.
+    /// Build or update the index.
     Index {
-        /// Directory to index. Defaults to the current directory.
+        /// The root directory of the index. Default: the current directory.
         #[arg(default_value = ".")]
         path: PathBuf,
 
-        /// What to do if a configured stage cannot be run.
+        /// The action when the binary cannot run a configured stage.
         ///
-        /// Without this, an interactive run asks and a non-interactive one
-        /// refuses. See [`DegradedArg`].
+        /// In an interactive run without this flag, you select the action. A
+        /// run with no terminal stops and writes no data.
         #[arg(long, value_name = "abort|allow")]
         degraded: Option<DegradedArg>,
     },
 
-    /// Show what the LLM classifier says about one file, without indexing it.
+    /// Show the LLM classifier output for one file. This command writes no files.
     ///
-    /// The stored descriptor is flattened, so an index cannot answer "which
-    /// part came back empty" or "did the identifier list absorb the prose".
-    /// This prints the model's structured answer next to the text that would
-    /// have been stored, and writes nothing — the loop for iterating on a
-    /// prompt before trusting any aggregate over a whole corpus.
+    /// MAP puts the parts of the model answer together into one stored
+    /// descriptor. Thus an index does not show which part was empty. This
+    /// command prints the structured answer of the model next to the text that
+    /// MAP stores. Use it to examine a prompt before you build a full index.
     #[cfg(feature = "llm")]
     Classify {
-        /// File to classify.
+        /// The file to classify.
         path: PathBuf,
 
-        /// Dimension whose classifier to run.
+        /// The dimension that gives the classifier.
         #[arg(short = 'd', long, default_value = "descriptive")]
         dim: String,
 
-        /// Stop after this many segments. One request either way.
+        /// Stop after this number of segments. The command makes one request
+        /// for all of them.
         #[arg(short = 'n', long, default_value_t = 4)]
         limit: usize,
     },
 
     /// Search the index.
     ///
-    /// The query is N-dimensional: pass one `-d DIM[:WEIGHT]=TEXT` per facet
-    /// you can express. Every field is optional, and an optional `:WEIGHT`
-    /// tunes how much that dimension pulls on the fused score.
+    /// A query has one field for each dimension. Use one `-d DIM[:WEIGHT]=TEXT`
+    /// for each dimension that you have text for. All fields are optional. An
+    /// optional `:WEIGHT` changes the effect of that dimension on the fused
+    /// score.
     Find(FindArgs),
 
-    /// Three-way merge of `.map/manifest.json`. Run by git, not by hand.
+    /// Print a short description of the index for an AI model.
     ///
-    /// Registered as the `map` merge driver by `map init` and `map index`, and
-    /// invoked as `map merge %O %A %B`. Two branches that each edit a
-    /// different resource and re-index conflict on this one file, and a
-    /// textual merge cannot tell a legitimate union of object tables from a
-    /// same-key/different-bytes collision.
+    /// The output gives each dimension with its description and the query
+    /// syntax. It also tells the model if the index is stale, and when an
+    /// update has a cost. An agent integration runs this command when a
+    /// session starts. When the directory has no index, the command prints no
+    /// text and stops with status 0.
+    Brief {
+        /// The directory to examine. Default: the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+
+    /// Three-way merge of `.map/manifest.json`. Git runs this command.
     ///
-    /// Writes the merged manifest over `ours` and exits 0, or leaves `ours`
-    /// untouched and exits 1 so git marks the file conflicted.
+    /// `map init` and `map index` set this command as the `map` merge driver.
+    /// Git runs it as `map merge %O %A %B`. When two branches each change a
+    /// different resource and build the index again, the two manifests are in
+    /// conflict. A text merge cannot see the difference between a correct
+    /// union of object tables and a collision of one key with different bytes.
+    ///
+    /// The command writes the merged manifest to `ours` and stops with status
+    /// 0. On a conflict, it does not change `ours`, and it stops with status
+    /// 1. Git then marks the file as a file with a conflict.
     Merge {
-        /// The common ancestor (git's `%O`). Empty when there is none.
+        /// The file of the ancestor (`%O` in git). Empty when there is no
+        /// ancestor.
         base: PathBuf,
-        /// Our version (`%A`). The result is written here.
+        /// The `ours` file (`%A` in git). The command writes the result to this
+        /// file.
         ours: PathBuf,
-        /// Their version (`%B`).
+        /// The `theirs` file (`%B` in git).
         theirs: PathBuf,
     },
 
-    /// Find objects no manifest reaches, and optionally delete them.
+    /// Find objects that no manifest reaches. Delete them with `--prune`.
     ///
-    /// Editing anything that feeds a dimension's fingerprint — a prompt, an
-    /// implementation, an embedder — gives its objects new keys, and the old
-    /// ones stay on disk. This is what removes them.
+    /// An edit to an input of a fingerprint gives the objects of that
+    /// dimension new keys. Examples of such inputs are a prompt, an
+    /// implementation, and an embedder. The previous objects stay on disk, and
+    /// this command finds them.
     ///
-    /// Reports by default and changes nothing without `--prune`, because a
-    /// stranded descriptor is LLM output that costs money to recreate and
-    /// reverting the config edit would make it live again.
+    /// Without `--prune`, the command only shows the objects and changes no
+    /// files. A descriptor from an LLM has a cost, and you can use it again if
+    /// you change the configuration back.
     Gc {
-        /// Directory whose index to collect. Defaults to the current directory.
+        /// The root directory of the index. Default: the current directory.
         #[arg(default_value = ".")]
         path: PathBuf,
 
-        /// Actually delete the unreachable objects.
+        /// Delete the unreachable objects.
         #[arg(long)]
         prune: bool,
     },
 
-    /// Show what the index currently holds.
+    /// Show the record count and the dimensions of the index.
     Status {
-        /// Directory to inspect. Defaults to the current directory.
+        /// The root directory of the index. Default: the current directory.
         #[arg(default_value = ".")]
         path: PathBuf,
     },
 
-    /// Manage the LLM connection used by semantic dimensions.
+    /// Install the newest version of MAP and replace this binary.
     ///
-    /// The endpoint and key are stored in `~/.map/llm.toml` — user-global and
-    /// gitignored — never in a repository's committed config.
+    /// The command runs `cargo install` with the cargo features of this
+    /// binary. It builds MAP from source. Thus Rust and a network connection
+    /// are necessary. If this binary is the newest version, the command
+    /// changes no files.
+    Upgrade {
+        /// Get the source from this git repository. Default: the MAP
+        /// repository.
+        #[arg(long, value_name = "URL")]
+        git: Option<String>,
+    },
+
+    /// Set or show the LLM connection for dimensions that use the `llm` classifier.
+    ///
+    /// MAP stores the endpoint and the key in `~/.map/llm.toml`. This file is
+    /// in your home directory. It is not in the committed configuration of a
+    /// repository.
     #[cfg(feature = "llm")]
     Llm {
         #[command(subcommand)]
         action: LlmAction,
     },
 
-    /// Manage the embedding model the `distilled` embedder loads.
+    /// Download or examine the embedding model for the `distilled` embedder.
     #[cfg(feature = "auto-distilled")]
     Model {
         #[command(subcommand)]
@@ -147,18 +188,19 @@ enum Command {
 #[cfg(feature = "auto-distilled")]
 #[derive(clap::Subcommand)]
 enum ModelAction {
-    /// Download the weights into `~/.map/models`.
+    /// Download the model weights into `~/.map/models`.
     ///
-    /// Files come from one pinned revision and each is checked against a
-    /// hardcoded sha256 before it is installed. Indexing never downloads; this
-    /// is the only command that reaches the network for weights.
+    /// The files come from one pinned revision. MAP compares each file with a
+    /// sha256 digest in the source code before it installs the file. An index
+    /// build does not download. Only this command uses the network to get
+    /// weights.
     Fetch {
-        /// Re-download and re-verify even if the files are already present.
+        /// Download and verify all files again, also when they are on disk.
         #[arg(long)]
         force: bool,
     },
 
-    /// Report whether the model is installed, and where it is looked for.
+    /// Show if the model is installed, and the directory where MAP looks for it.
     Status,
 }
 
@@ -172,9 +214,9 @@ enum ModelAction {
 /// its own config describes, and nothing about querying it looks wrong.
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum DegradedArg {
-    /// Refuse to build. Nothing is written.
+    /// Do not build. Write no data.
     Abort,
-    /// Build the dimensions that do resolve and omit the rest.
+    /// Build the dimensions that the binary can run, and omit the others.
     Allow,
 }
 
@@ -182,95 +224,159 @@ enum DegradedArg {
 #[cfg(feature = "llm")]
 #[derive(Subcommand)]
 enum LlmAction {
-    /// Prompt for the endpoint, model, and key, and cache them.
+    /// Get the endpoint, the model, and the key from you, and save them.
     Login,
-    /// Show the cached connection (endpoint and model, never the key).
+    /// Show the saved connection: the endpoint and the model, without the key.
     Status,
 }
 
 #[derive(Args)]
 struct FindArgs {
-    /// Query text for a dimension, as `DIM[:WEIGHT]=TEXT`.
+    /// The query text for one dimension, as `DIM[:WEIGHT]=TEXT`.
     ///
-    /// Repeat once per facet. An optional `:WEIGHT` tunes that dimension's pull
-    /// in the fused score (default 1.0; `:0` excludes it), e.g.
+    /// Use this flag one time for each dimension. An optional `:WEIGHT`
+    /// changes the effect of that dimension on the fused score. The default
+    /// weight is 1.0, and `:0` removes the dimension. Example:
     /// `-d lexical:2=refresh_token -d descriptive="expires a session"`.
     #[arg(short = 'd', long = "dim", value_name = "DIM[:WEIGHT]=TEXT")]
     dims: Vec<String>,
 
-    /// Shorthand for `--dim lexical=<text>`.
+    /// Short form for `--dim lexical=<text>`. It searches the `lexical`
+    /// dimension only.
     #[arg(value_name = "QUERY")]
     lexical: Option<String>,
 
-    /// Maximum hits to return.
+    /// The maximum number of hits.
     #[arg(short = 'n', long, default_value_t = 10)]
     limit: usize,
 
-    /// Print the matching text, not just the location.
+    /// Print the first 12 lines of each segment hit, after its location.
     #[arg(long)]
     snippet: bool,
 
-    /// For a cluster hit, list the spans beneath it.
+    /// For a cluster hit, show the spans below it.
     ///
-    /// A cluster's own location is meaningless — it spans no file — so this is
-    /// what it actually delivers: the whole subtree in one result instead of a
-    /// probe per part. Resolving it rebuilds the level-0 id map, which is
-    /// O(corpus), so it is opt-in rather than always shown.
+    /// A cluster has no file location, because it is not part of one file.
+    /// This flag shows the files of the cluster and the number of spans in
+    /// each file. The command builds the level 0 id table for this, and that
+    /// cost increases with the corpus size. Thus the flag is optional.
     #[arg(long)]
     members: bool,
 
-    /// Update the index before searching.
+    /// Update the index before the search.
     ///
-    /// Off by default: repair is incremental, but a configured dense
-    /// dimension can make it slow, and a query should never surprise you with
-    /// one. Without this, a stale index is reported rather than repaired.
+    /// The default is no update. An update changes only the necessary objects.
+    /// But an embedding dimension or an LLM dimension can make it slow, and an
+    /// LLM dimension has a cost. Without this flag, MAP tells you when the
+    /// index is stale, and it does not update the index.
     #[arg(short = 'u', long)]
     update: bool,
 
-    /// Never print the staleness notice.
+    /// Do not print the stale-index notice.
     #[arg(short = 'q', long)]
     quiet: bool,
 
-    /// Which fabric levels to return. Defaults to all of them.
+    /// The levels to search. Default: all levels.
     ///
-    /// Segments are level `0`; the fabricator's clusters are `1` and up, each
-    /// level a coarser view of the one below. Pass a height, an inclusive
-    /// range, or a comma-separated list of either: `--level 0` for precise
-    /// spans only, `--level 1,3` for two heights, `--level 0-2` for a span,
-    /// `--level 0,2-4` for a mix.
+    /// A segment is level `0`. The clusters of a fabricator are level `1` and
+    /// higher, and each level is a summary of the level below it. Give one
+    /// level, a range, or a list: `--level 0` for segments only, `--level 1,3`
+    /// for two levels, `--level 0-2` for a range, `--level 0,2-4` for a list
+    /// and a range.
     ///
-    /// The names `segments` (= 0), `clusters` (= every level above 0), and
-    /// `all` also work; `clusters` is not expressible as a number list because
-    /// it does not name a fixed height.
+    /// You can also use these names: `segments` (level 0), `clusters` (all
+    /// levels above 0), and `all`. `clusters` has no number form, because the
+    /// height of the tree is different for each corpus.
     #[arg(long, value_name = "LEVELS", default_value = "all")]
     level: String,
 
-    /// Directory to search. Defaults to the current directory.
+    /// The root directory of the index. Default: the current directory.
     #[arg(long, default_value = ".")]
     path: PathBuf,
 
-    /// What to do if `-u` finds a configured stage it cannot run.
+    /// The action when `-u` finds a configured stage that the binary cannot run.
     #[arg(long, value_name = "abort|allow")]
     degraded: Option<DegradedArg>,
 
-    /// Search an additional index, repeatable.
+    /// Search one more index. You can use this flag more than one time.
     ///
-    /// Every listed root is queried and the results merged into one ranking,
-    /// each hit labelled with the repository it came from. Scores are
-    /// normalized against the combined corpus, so they stay comparable across
+    /// MAP searches each root and merges the hits into one list. Each hit
+    /// shows its repository. MAP normalizes scores with the statistics of all
+    /// indexes together. Thus you can compare the scores of different
     /// repositories.
     #[arg(long = "root", value_name = "PATH")]
     roots: Vec<PathBuf>,
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    #[cfg(windows)]
+    upgrade::remove_previous_binary();
+
+    // The version text carries the commit and the features, which a derive
+    // attribute cannot compute. Leaked rather than owned: clap wants
+    // `'static` here without an extra feature, and this runs once.
+    let short: &'static str = Box::leak(build_info::version_line().into_boxed_str());
+    let long: &'static str = Box::leak(build_info::long_version().into_boxed_str());
+    let matches = Cli::command()
+        .version(short)
+        .long_version(long)
+        .get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+
+    match run(cli) {
         Ok(code) => code,
         Err(message) => {
             eprintln!("map: {message}");
+            if let Some(hint) = newer_index_hint(&message) {
+                eprintln!("map: {hint}");
+            }
             ExitCode::FAILURE
         }
     }
+}
+
+/// What to say when an error could mean "this binary is older than the index".
+///
+/// A teammate upgrades, commits an index that uses something new, and every
+/// older binary then fails on it with a message that never mentions versions.
+/// Matched on the message text because every error reaches `main` as a
+/// string; the tests build the real errors, so a reworded message fails there
+/// rather than silently losing its hint.
+fn newer_index_hint(message: &str) -> Option<&'static str> {
+    const CERTAIN: &str =
+        "a newer version of MAP wrote this index. Run `map upgrade` to install the newest version.";
+    const POSSIBLE: &str =
+        "if a newer version of MAP wrote this index, run `map upgrade` to install the newest version.";
+
+    // "index uses config version 2, this build supports 1". Anchored on
+    // "index uses " first: text ahead of it can hold the word "version" too,
+    // and the numbers would then be read from the wrong place.
+    if let Some((_, rest)) = message.split_once("index uses ") {
+        if let Some((_, rest)) = rest.split_once(" version ") {
+            if let Some((found, expected)) = rest.split_once(", this build supports ") {
+                let number = |text: &str| -> Option<u32> {
+                    text.split(|c: char| !c.is_ascii_digit())
+                        .next()?
+                        .parse()
+                        .ok()
+                };
+                return match (number(found), number(expected)) {
+                    // An *older* index is a different problem with a different
+                    // fix, and upgrading would not help.
+                    (Some(found), Some(expected)) if found > expected => Some(CERTAIN),
+                    _ => None,
+                };
+            }
+        }
+    }
+    // A key or a value this binary has never heard of: a newer MAP, or a typo.
+    let unknown = message.contains("unknown field") || message.contains("unknown variant");
+    if (message.contains("config parse error") && unknown)
+        || message.contains("index uses hash algorithm")
+    {
+        return Some(POSSIBLE);
+    }
+    None
 }
 
 fn run(cli: Cli) -> Result<ExitCode, String> {
@@ -439,12 +545,12 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!(
                 "  unreachable:       {} objects, {:.2} MB",
                 report.unreachable.len(),
-                report.bytes as f64 / (1024.0 * 1024.0)
+                report.bytes as f64 / 1_000_000.0
             );
             for (store, (count, bytes)) in report.by_store() {
                 println!(
                     "    {store:<9} {count:>5} objects  {:>8.2} MB",
-                    bytes as f64 / (1024.0 * 1024.0)
+                    bytes as f64 / 1_000_000.0
                 );
             }
 
@@ -468,6 +574,17 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
 
         Command::Find(args) => find(args),
+
+        Command::Upgrade { git } => upgrade::run(git),
+
+        Command::Brief { path } => {
+            // Nothing at all without an index: the caller is a session-start
+            // hook that runs in every repository, and most have no `.map`.
+            if let Some(text) = brief::run(&path)? {
+                print!("{text}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
 
         #[cfg(feature = "llm")]
         Command::Llm { action } => llm(action),
@@ -690,9 +807,26 @@ fn repository_at_or_above(start: &Path) -> Option<PathBuf> {
 /// `git_runnable` is false when the `git` binary could not be launched at all;
 /// `configured` is whatever `git config --get merge.map.driver` printed. Split
 /// out from the doing so the policy is testable without a git binary.
-fn should_register(git_runnable: bool, configured: Option<&str>) -> bool {
+///
+/// `program_gone` is true when the configured command names a binary that is
+/// no longer on disk. The command embeds an absolute path, so a `map` that was
+/// installed somewhere else since — or a development build that has been
+/// cleaned away — leaves a driver git cannot run, and every manifest merge
+/// then fails. That is the one case an already-set driver is replaced.
+fn should_register(git_runnable: bool, configured: Option<&str>, program_gone: bool) -> bool {
     let already_set = matches!(configured, Some(value) if !value.trim().is_empty());
-    git_runnable && !already_set
+    git_runnable && (!already_set || program_gone)
+}
+
+/// The program a driver command runs: its first word, without the quotes
+/// `register_merge_driver` writes around it.
+fn driver_program(command: &str) -> Option<PathBuf> {
+    let command = command.trim();
+    let program = match command.strip_prefix('"') {
+        Some(rest) => rest.split('"').next()?,
+        None => command.split_whitespace().next()?,
+    };
+    (!program.is_empty()).then(|| PathBuf::from(program))
 }
 
 fn git_config(repo: &Path, args: &[&str]) -> Option<std::process::Output> {
@@ -727,7 +861,13 @@ fn register_merge_driver(start: &Path) {
             .success()
             .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
     });
-    if !should_register(probe.is_some(), configured.as_deref()) {
+    // Only an absolute path can be shown to be gone. A bare `map` is resolved
+    // by git's shell at merge time, and is somebody's deliberate choice.
+    let program_gone = configured
+        .as_deref()
+        .and_then(driver_program)
+        .is_some_and(|program| program.is_absolute() && !program.exists());
+    if !should_register(probe.is_some(), configured.as_deref(), program_gone) {
         return;
     }
 
@@ -1194,8 +1334,8 @@ fn report_staleness(args: &FindArgs) {
 #[cfg(test)]
 mod tests {
     use super::{
-        display_path, merge_manifests, parse_dim, parse_levels, repository_at_or_above,
-        should_register,
+        display_path, driver_program, merge_manifests, newer_index_hint, parse_dim, parse_levels,
+        repository_at_or_above, should_register,
     };
     use map_format::{Manifest, ObjectEntry, ObjectKey, Tier};
     use map_query::LevelFilter;
@@ -1234,7 +1374,10 @@ mod tests {
             display_path(Path::new(r"\\?\UNC\server\share\repo")),
             r"\\server\share\repo"
         );
-        assert_eq!(display_path(Path::new("/home/ian/repo")), "/home/ian/repo");
+        assert_eq!(
+            display_path(Path::new("/home/user/repo")),
+            "/home/user/repo"
+        );
     }
 
     #[test]
@@ -1243,13 +1386,107 @@ mod tests {
         // already-set case is a config read and a silent return.
         assert!(!should_register(
             true,
-            Some("C:/bin/map.exe merge %O %A %B")
+            Some("C:/bin/map.exe merge %O %A %B"),
+            false
         ));
         // Git absent is not a reason to fail anything, only a reason to stop.
-        assert!(!should_register(false, None));
+        assert!(!should_register(false, None, false));
         // Unset, and a key present but empty, both need writing.
-        assert!(should_register(true, None));
-        assert!(should_register(true, Some("  \n")));
+        assert!(should_register(true, None, false));
+        assert!(should_register(true, Some("  \n"), false));
+    }
+
+    #[test]
+    fn a_driver_whose_binary_is_gone_is_registered_again() {
+        // The registered command holds an absolute path. After `map` moves —
+        // a new install root, a cleaned build directory — git cannot run it,
+        // and without this every later manifest merge fails.
+        let stale = Some("\"C:/old/place/map.exe\" merge %O %A %B");
+        assert!(should_register(true, stale, true));
+        assert!(!should_register(true, stale, false));
+        // Still never without git.
+        assert!(!should_register(false, stale, true));
+    }
+
+    #[test]
+    fn the_program_of_a_driver_command_is_its_first_word_without_quotes() {
+        assert_eq!(
+            driver_program("\"C:/Program Files/map/map.exe\" merge %O %A %B"),
+            Some(PathBuf::from("C:/Program Files/map/map.exe"))
+        );
+        assert_eq!(
+            driver_program("/usr/local/bin/map merge %O %A %B\n"),
+            Some(PathBuf::from("/usr/local/bin/map"))
+        );
+        assert_eq!(driver_program("   "), None);
+    }
+
+    /// The smallest config that parses, at a chosen format version.
+    fn minimal_config(version: u32) -> String {
+        format!(
+            "version = {version}\n[dimensions.lexical]\ndescription = \"x\"\n\
+             classifier = {{ impl = \"structural\" }}\n"
+        )
+    }
+
+    #[test]
+    fn the_minimal_test_config_is_valid_at_the_supported_version() {
+        // Otherwise the two hint tests could pass on an unrelated parse error.
+        map_format::Config::parse(&minimal_config(1)).unwrap();
+    }
+
+    #[test]
+    fn an_index_from_a_newer_map_gets_the_upgrade_hint() {
+        // Built from the real errors, so rewording one of them fails here
+        // instead of quietly dropping the hint.
+        let newer = map_format::Config::parse(&minimal_config(2))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            newer_index_hint(&newer).is_some_and(|h| h.starts_with("a newer version")),
+            "{newer}"
+        );
+
+        let unknown_key =
+            map_format::Config::parse(&format!("{}weight = 2.0\n", minimal_config(1)))
+                .unwrap_err()
+                .to_string();
+        assert!(
+            newer_index_hint(&unknown_key).is_some_and(|h| h.starts_with("if a newer version")),
+            "{unknown_key}"
+        );
+    }
+
+    #[test]
+    fn the_upgrade_hint_reads_the_versions_that_follow_index_uses() {
+        // A caller can put text in front of the error, and that text can hold
+        // the word "version". The two numbers still come from the error.
+        let newer = map_format::Config::parse(&minimal_config(2))
+            .unwrap_err()
+            .to_string();
+        let wrapped = format!("map version 0.0.1 cannot open the index: {newer}");
+        assert!(
+            newer_index_hint(&wrapped).is_some_and(|h| h.starts_with("a newer version")),
+            "{wrapped}"
+        );
+    }
+
+    #[test]
+    fn an_older_index_and_an_ordinary_error_get_no_upgrade_hint() {
+        // Upgrading cannot fix an index that is older than the binary, and
+        // most errors have nothing to do with versions at all.
+        let older = map_format::Config::parse(&minimal_config(0))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(newer_index_hint(&older), None, "{older}");
+        assert_eq!(
+            newer_index_hint("no .map directory found at or above . — run `map init` first"),
+            None
+        );
+        assert_eq!(
+            newer_index_hint("unknown dimension \"nosuch\"; this index has: lexical"),
+            None
+        );
     }
 
     #[test]

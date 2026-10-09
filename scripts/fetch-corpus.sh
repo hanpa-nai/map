@@ -2,13 +2,14 @@
 #
 # Clone the pinned example corpora as siblings of the map repo.
 #
-#     software/
+#     parent/
 #     ├─ map/       <- this repo
 #     ├─ ripgrep/   <- corpus
 #     └─ flask/     <- corpus
 #
-# Pins are exact commits. This is load-bearing: eval/qrels.jsonl judges specific
-# line ranges, and eval/baseline-*.json freezes the scores those judgments
+# Pins are exact commits. This is load-bearing: the qrels.jsonl of a corpus in
+# eval/corpora judges specific line ranges, and eval/baseline-*.json freezes
+# the scores those judgments
 # produce, so both rot silently against a moving corpus. Do not change a pin
 # without re-authoring the judgments and re-freezing the baselines.
 #

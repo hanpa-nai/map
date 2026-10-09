@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "map brief",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

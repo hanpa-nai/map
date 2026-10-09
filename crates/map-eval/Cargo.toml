@@ -12,18 +12,18 @@ publish.workspace = true
 workspace = true
 
 # Querying a dense dimension needs the retriever to encode the query, so the
-# default eval build stays lexical/grep-only and pulls no tokenizer or
-# model-loading code.
+# default eval build has no embedder and pulls no tokenizer or model-loading
+# code.
 [features]
 default = []
-# map-query/distilled lets the retriever encode a dense query, which --fused
-# and --semantic need to query a dense dimension through the real index.
+# map-query/distilled lets the retriever encode a dense query, which --fused,
+# --descriptive, and a --dim that names a dense dimension need.
 distilled = ["map-query/distilled"]
 
 [dependencies]
-map-core = { version = "0.0.0", path = "../map-core" }
-map-query = { version = "0.0.0", path = "../map-query" }
-map-stages = { version = "0.0.0", path = "../map-stages" }
+map-core = { version = "0.0.1", path = "../map-core" }
+map-query = { version = "0.0.1", path = "../map-query" }
+map-stages = { version = "0.0.1", path = "../map-stages" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 

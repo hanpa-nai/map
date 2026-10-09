@@ -16,7 +16,7 @@ updates:
 
   # Cargo is deliberately absent. Advisories are already watched by the
   # `supply chain` job in ci.yml, which fails only on critical vulnerabilities,
-  # and the lockfile is load-bearing for determinism: the golden hashes in the
+  # and the lockfile is load-bearing for determinism: the frozen scores in the
   # eval baselines and the run-twice byte-identity test are all measured
   # against pinned dependency versions. A weekly bump PR would churn those for
   # no gain. Update Cargo dependencies deliberately, and re-measure.

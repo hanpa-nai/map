@@ -57,10 +57,9 @@ jobs:
     # `github`, `needs`, `strategy`, `matrix`, `vars` and `inputs` are — so
     # `name: msrv ${{ env.MSRV }}` is a workflow-file validation error. It does
     # not fail this job: it fails the whole FILE, so no job runs at all and the
-    # run reports zero jobs. That is what shipped on 2026-07-31 and it left CI
-    # dead for thirteen commits while every push showed a red X that looked
-    # like a test failure. Step-level `name:` and `run:` do get `env`, which is
-    # why the interpolation below is fine.
+    # run reports zero jobs, while the push shows a red X that looks like a test
+    # failure. Step-level `name:` and `run:` do get `env`, which is why the
+    # interpolation below is fine.
     name: msrv
     runs-on: ubuntu-latest
     env:

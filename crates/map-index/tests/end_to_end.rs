@@ -765,7 +765,7 @@ fn a_pulled_manifest_is_not_shadowed_by_a_stale_cache_pack() {
 
 #[test]
 fn a_forged_cache_marker_is_rejected_but_a_local_one_is_trusted() {
-    // #4: the mmap fast path must not trust a pack a hostile clone force-added.
+    // The mmap fast path must not trust a pack a hostile clone force-added.
     // A locally built cache carries a marker keyed with this machine's secret;
     // any marker an attacker could commit (they lack the key) is rejected.
     let corpus = Corpus::new("forged-marker");

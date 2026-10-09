@@ -17,7 +17,8 @@ INDEX="${1:-../ripgrep}"
 EVAL_BIN="${EVAL_BIN:-cargo run --release -p map-eval --features distilled --}"
 OUT="${OUT:-eval/bench}"
 
-# Every non-empty subset of the three dimensions, coarse to fused.
+# The dimension sets of the README retrieval table, coarse to fused. The grep
+# row of that table comes from `map-eval --grep`, not from this script.
 COMBOS=(
   "lexical"
   "declaration"

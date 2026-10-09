@@ -2,7 +2,7 @@
 # on them: the preprocessor normalizes CRLF to LF before segmenting, so object
 # keys derive from normalized content (spec §6.1). Verified, not assumed — the
 # pinned ripgrep corpus is checked out CRLF on Windows and LF elsewhere, and
-# both produce the same 412 object keys. rustfmt accepts either, and Rust's
+# both produce the same object keys. rustfmt accepts either, and Rust's
 # `str::lines()` strips a trailing CR, so the eval JSONL parses either way.
 #
 # A shell script is the one file whose bytes a program other than ours reads:

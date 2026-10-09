@@ -38,7 +38,7 @@ pub enum QueryError {
     #[error("unknown dimension {name:?}; this index has: {available}")]
     UnknownDimension { name: String, available: String },
     #[error(
-        "dimension {dimension:?} is dense and needs the distilled embedder plugin \
+        "dimension {dimension:?} uses an embedder and needs the distilled embedder plugin \
          (build with --features distilled and install the model) to encode a query"
     )]
     EmbedderUnavailable { dimension: String },
@@ -433,8 +433,9 @@ impl Index {
         // a `cache/lexical.pack` force-committed by a hostile clone was mapped
         // as trusted under an untouched manifest. The markers are per pack
         // because they bind pack bytes, so they can only be checked one pack at
-        // a time. Hashing all three of ripgrep's packs — 12.8 MB — measured
-        // 8.2 ms release: that is the price of the check, paid once per open.
+        // a time. Hashing all four of ripgrep's packs — 13.0 MB — measured
+        // 17 ms release, and the two default packs — 2.4 MB — 4 ms: that is
+        // the price of the check, paid once per open.
         // Fail closed — only a *missing* manifest
         // trusts a pack as-is, since there is then nothing to rebuild from, and
         // a pack alone grants no more than the authored objects the rebuild

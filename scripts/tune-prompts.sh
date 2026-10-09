@@ -13,9 +13,8 @@
 #   nDCG    does retrieval actually improve
 #   struct% share of descriptors that open by describing *syntax* ("imports…",
 #           "defines a struct…") rather than behaviour. This is the leading
-#           indicator: the current prompt yields 39% structural, and a segment
-#           described as "imports various modules" cannot be retrieved by
-#           anything a caller would type.
+#           indicator: a segment described as "imports various modules" cannot
+#           be retrieved by anything a caller would type.
 #
 # Nothing is pruned. Each variant strands the previous generation, which is what
 # makes it possible to go back to the winner without re-billing.
@@ -34,9 +33,7 @@ trap restore EXIT
 
 # Level-0 prompts only. The cluster prompt is held fixed so the comparison is
 # about descriptor quality, not labelling.
-#
-# `baseline` is what the corpus was last built with, so it needs no rerun — its
-# numbers are quoted from that build.
+
 # Fraction of descriptors that open structurally rather than behaviourally.
 descriptor_split() {
   python - "$INDEX" <<'PY'
@@ -107,9 +104,8 @@ done <<<"$VARIANT_LIST"
 
 cat <<'NOTE'
 
-Baseline for comparison — the one-sentence prompt, scored on the SAME 47-query
-corpus these variants use (the 44-query figure was 0.590; do not mix them):
-  descriptive  0.554  0.727  0.533   39% structural
+Baseline for comparison: the `descriptive` row of the retrieval table in
+README.md, scored on the same 47-query corpus these variants use.
 
 Read a log before trusting the table. `map gc --prune` on the winner once
 chosen; until then every generation is still on disk and reversible.

@@ -1,6 +1,6 @@
 [package]
 name = "map-stages"
-description = "Reference stage implementations: structural/BM25, model-api, fusion."
+description = "Reference stage implementations: discovery, segmentation, classification, BM25 and cosine scoring."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,9 +20,9 @@ llm = ["dep:map-llm"]
 [dependencies]
 getrandom = "0.2"
 ignore = "0.4.30"
-map-core = { version = "0.0.0", path = "../map-core" }
-map-format = { version = "0.0.0", path = "../map-format" }
-map-llm = { version = "0.0.0", path = "../map-llm", optional = true }
+map-core = { version = "0.0.1", path = "../map-core" }
+map-format = { version = "0.0.1", path = "../map-format" }
+map-llm = { version = "0.0.1", path = "../map-llm", optional = true }
 memmap2 = "0.9.11"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

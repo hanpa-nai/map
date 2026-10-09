@@ -1,70 +1,101 @@
 # Security
 
-## Reporting a vulnerability
+## Vulnerability reports
 
-Please report privately through
-[GitHub's private vulnerability reporting](https://github.com/hanpa-nai/map/security/advisories/new)
-rather than opening a public issue. If that is unavailable to you, open an issue
-saying only that you have a security report and asking for a contact route —
-no details.
+Use the
+[private vulnerability report form on GitHub](https://github.com/hanpa-nai/map/security/advisories/new).
+Do not put the information about the problem in a public issue.
 
-There is no service to take offline, so there is no embargo pressure from our
-side. Expect an acknowledgement within a few days, and a fix or a written
-explanation of why something is not a vulnerability before any public
-disclosure.
+If you cannot use the form, open an issue. In the issue, write only that you
+have a security report and that a contact method is necessary. Do not give
+other information in that issue.
 
-## What this project treats as a vulnerability
+MAP does not operate a service that the maintainers must stop. Thus a short
+embargo is not necessary for the maintainers. The maintainers acknowledge a
+report in a small number of days. Before public disclosure, the maintainers
+release a fix. If the report is not a vulnerability, they send you a written
+explanation.
 
-The interesting attacks are not against the binary.
+## Problems that are vulnerabilities
 
-**A committed `.map/` index is untrusted data that steers a model's attention.**
-Descriptors and cluster labels are injected into a language model's context as
-retrieval results. A malicious descriptor is therefore a prompt-injection
-payload with a persistent home in a repository, delivered by nothing more
-suspicious than `git clone`. The normative statement of this is
+The most important attacks are not attacks on the binary.
+
+**A committed `.map/` index is untrusted data, and it controls the text that a
+model reads.** MAP puts descriptors and cluster labels into the context of a
+language model as search results. Thus a dangerous descriptor is a
+prompt-injection payload that stays in a repository. `git clone` is sufficient
+to send it to a user. The normative rule is in
 [`spec/format-v1.md`](spec/format-v1.md) §8.
 
-In scope, and taken seriously:
+These problems are in the scope:
 
-- **Reading an index escalates beyond reading data.** Path traversal out of the
-  repository via a resource key, a decoder that panics or over-allocates on
-  hostile committed bytes, or anything that turns opening an index into code
-  execution.
-- **Silent corruption of what a query returns.** Content-hash checks that can
-  be bypassed, or an index that answers with data it should have refused.
-- **Escape of credentials.** The LLM endpoint and key live in `~/.map/llm.toml`,
-  never in the committed `config.toml`. A key reaching an index, a log, a
-  descriptor, or a network destination other than the configured endpoint is a
-  vulnerability.
-- **Terminal or display injection** through descriptors, cluster labels, or
-  resource keys — attacker-authored text that rewrites a terminal or spoofs
-  output.
-- **Weights installed that are not the pinned ones.** `map model fetch` pins a
-  repository revision and a sha256 per file, and installs nothing that does not
-  verify. A path that installs unverified bytes, accepts a digest it should have
-  rejected, or writes outside `~/.map/models` is a vulnerability. Only that
-  command downloads; `map index` never does, and a build without
-  `auto-distilled` links no HTTP client at all.
+- **MAP does more than read data when it opens an index.** Examples:
+  - A resource key points to a path that is not in the repository.
+  - A decoder panics, or allocates too much memory, when it reads dangerous
+    committed bytes.
+  - A defect lets an index run code when MAP opens it.
+- **A query returns incorrect data with no error.** Examples:
+  - An attacker can bypass a content hash check.
+  - An index returns data that MAP must reject.
+- **A credential goes out of its file.** The LLM endpoint and key are in
+  `~/.map/llm.toml`. They are not in the committed `config.toml`. It is a
+  vulnerability if a key gets into an index, a log, or a descriptor. It is also
+  a vulnerability if a key goes to a network address that is not the configured
+  endpoint.
+- **Text in an index changes the terminal display.** An attacker writes text in
+  a descriptor, a cluster label, or a resource key. That text then changes the
+  text on the terminal, or shows incorrect output.
+- **A dimension description changes the structure of the `map brief` output.**
+  `map brief` puts each description from `config.toml` into the context of a
+  model. It prints a description on one line. It removes control characters,
+  zero-width characters, and the characters that change the direction of the
+  text. It cuts a description after 240 characters. It is a vulnerability if a description can
+  add a line to that output or remove a line from it.
+- **MAP installs model weights that are not the pinned weights.**
+  `map model fetch` pins one repository revision and one sha256 digest for each
+  file. It installs only the files that agree with the digest. It is a
+  vulnerability if MAP does one of these operations:
+  - It installs bytes that it did not verify.
+  - It accepts an incorrect digest.
+  - It writes to a location that is not in `~/.map/models`.
 
-Out of scope, by design rather than by omission:
+  Only `map model fetch` downloads model files. `map index` does not download.
+  A binary that has no `auto-distilled` feature and no `llm` feature links no
+  HTTP client.
+- **`map upgrade` installs code from an incorrect source.** `map upgrade` runs
+  `git ls-remote` and `cargo install`. cargo gets the MAP source from the
+  repository URL that is in the binary, or from the `--git` URL. It gets the
+  dependencies of `Cargo.lock` from crates.io. After the install,
+  `map upgrade` runs the new binary with `-V`. It is a vulnerability if
+  `map upgrade` gets the source from a different location, or if it runs a
+  different program.
 
-- **A descriptor that is merely wrong, biased, or misleading.** Descriptors are
-  Tier C: authored, not reproducible, and carrying provenance instead of a
-  correctness guarantee. Provenance is the control, not recomputation.
-- **Prompt injection *content* in an index you chose to trust.** Loading a
-  third-party index is equivalent to running their code in your model's
-  context. Review it, or do not load it. The format keeps index files
-  reviewable — `.gitattributes` uses `linguist-generated=true` and never
-  `-diff`.
-- **Cost incurred by a classifier you configured.** Indexing with an LLM
-  dimension spends money by design; `map find` never calls one.
+  `map upgrade` trusts the newest commit of that repository. It does not verify
+  a signature.
 
-## Reporting a malicious published index
+The project does not include these problems in the scope:
 
-If you find a *published* index carrying hostile descriptors, that is a report
-worth making even though it is not a flaw in this code.
+- **A descriptor that is incorrect, has a bias, or causes an incorrect
+  decision.** Descriptors are Tier C. A model writes them, and MAP cannot
+  reproduce them. They have provenance, not a guarantee that they are correct.
+  The control is provenance. MAP does not calculate a descriptor again to
+  verify it.
+- **Prompt-injection content in an index that you accepted.** A different
+  person made the index. When you load it, the effect is the same as if you run
+  the code of that person in the context of your model. Examine the index, or
+  do not load it. The format lets a reviewer read the index files:
+  `.gitattributes` uses `linguist-generated=true` and does not use `-diff`.
+- **The cost of a classifier that you configured.** An index build with an LLM
+  dimension always has a cost. `map find` calls a classifier only when you use
+  `-u`.
 
-## Supported versions
+## Reports of a dangerous public index
 
-The format spec is **DRAFT** and nothing is released. Until v0.1, security fixes
-land on `main` only, and no compatibility with earlier indexes is promised.
+If you find a public index that contains dangerous descriptors, send a report.
+Such an index is not a defect in this code, but the report helps.
+
+## Versions
+
+The format specification is a draft. Security fixes go to `main` only, as a
+new version. MAP gives no guarantee that it can read an index that a previous
+version of MAP wrote.
