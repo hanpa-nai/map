@@ -1,0 +1,22 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Local editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Corpus repos are cloned as siblings of this repo, not inside it.
+# See scripts/fetch-corpus.* — nothing corpus-related belongs here.
+
+# Local-only overrides
+/.map/cache/
+*.local.toml
+
+# Benchmark output. Derived and machine-specific; the frozen baselines that
+# regressions are checked against live in eval/baseline-*.json and are tracked.
+/eval/bench/
+/eval/prompts/
+/eval/split/

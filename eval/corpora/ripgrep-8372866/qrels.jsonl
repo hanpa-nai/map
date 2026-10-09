@@ -1,0 +1,120 @@
+{"query_id":"rg-001","resource":"crates/searcher/src/searcher/mod.rs","start_line":34,"end_line":118,"grade":2,"why":"BinaryDetection: the none/quit/convert strategies and their accessors, with the doc comment explaining why detection differs between buffered and mmap'd search."}
+{"query_id":"rg-001","resource":"crates/searcher/src/line_buffer.rs","start_line":55,"end_line":85,"grade":2,"why":"The underlying BinaryDetection enum and is_quit; this is where the strategy is actually represented for the buffered path."}
+{"query_id":"rg-001","resource":"crates/searcher/src/searcher/mod.rs","start_line":500,"end_line":520,"grade":1,"why":"The builder method that installs the strategy. Useful context, does not explain the mechanism."}
+{"query_id":"rg-002","resource":"crates/searcher/src/line_buffer.rs","start_line":480,"end_line":526,"grade":2,"why":"roll() shifts unconsumed bytes to the front and ensure_capacity() grows the buffer; together these are the answer."}
+{"query_id":"rg-002","resource":"crates/searcher/src/line_buffer.rs","start_line":406,"end_line":479,"grade":2,"why":"fill() is the caller that hits the boundary and decides to roll or grow."}
+{"query_id":"rg-002","resource":"crates/searcher/src/line_buffer.rs","start_line":25,"end_line":45,"grade":1,"why":"BufferAllocation sets the growth policy and cap. Supporting context."}
+{"query_id":"rg-003","resource":"crates/searcher/src/searcher/mmap.rs","start_line":13,"end_line":60,"grade":2,"why":"MmapChoice is the whole decision: auto vs never, and the safety argument for when mapping is used."}
+{"query_id":"rg-004","resource":"crates/globset/src/glob.rs","start_line":76,"end_line":210,"grade":2,"why":"Glob and GlobMatcher: where a parsed glob is turned into its regex and matcher form."}
+{"query_id":"rg-004","resource":"crates/globset/src/lib.rs","start_line":271,"end_line":308,"grade":2,"why":"new_regex and new_regex_set are the actual regex construction from glob-derived patterns."}
+{"query_id":"rg-004","resource":"crates/globset/src/glob.rs","start_line":211,"end_line":252,"grade":1,"why":"GlobBuilder and GlobOptions control case sensitivity and literal separators. Supporting."}
+{"query_id":"rg-005","resource":"crates/globset/src/lib.rs","start_line":461,"end_line":565,"grade":2,"why":"Strategy selection: globs are bucketed into extension, prefix, suffix and literal strategies so most never reach a regex."}
+{"query_id":"rg-005","resource":"crates/globset/src/lib.rs","start_line":650,"end_line":710,"grade":2,"why":"GlobSetMatchStrategy dispatch, where each bucket's matcher is actually run."}
+{"query_id":"rg-005","resource":"crates/globset/src/lib.rs","start_line":309,"end_line":460,"grade":1,"why":"GlobSet plus is_match_candidate and matches_into: the public entry point into the strategies."}
+{"query_id":"rg-006","resource":"crates/ignore/src/gitignore.rs","start_line":320,"end_line":457,"grade":2,"why":"GitignoreBuilder and add(): reads a gitignore file and accumulates rules."}
+{"query_id":"rg-006","resource":"crates/ignore/src/gitignore.rs","start_line":458,"end_line":580,"grade":2,"why":"add_line() is the actual per-line gitignore syntax parser: negation, anchoring, directory-only."}
+{"query_id":"rg-006","resource":"crates/ignore/src/gitignore.rs","start_line":81,"end_line":201,"grade":1,"why":"The Gitignore type the parse produces. Context for the result, not the parsing."}
+{"query_id":"rg-007","resource":"crates/ignore/src/walk.rs","start_line":1714,"end_line":1850,"grade":2,"why":"Worker::run and run_one: the per-thread loop, including how work is taken and how quitting propagates."}
+{"query_id":"rg-007","resource":"crates/ignore/src/walk.rs","start_line":1404,"end_line":1529,"grade":2,"why":"WalkParallel::run and visit: spawns the threads and hands each a visitor."}
+{"query_id":"rg-007","resource":"crates/ignore/src/walk.rs","start_line":1360,"end_line":1403,"grade":1,"why":"The ParallelVisitor trait the workers call into. Interface context."}
+{"query_id":"rg-008","resource":"crates/ignore/src/default_types.rs","start_line":1,"end_line":375,"grade":2,"why":"DEFAULT_TYPES is the entire answer: one table of (names, globs). Judged whole because the file is nothing else."}
+{"query_id":"rg-008","resource":"crates/ignore/src/types.rs","start_line":305,"end_line":400,"grade":1,"why":"TypesBuilder::add_defaults consumes the table. Supporting."}
+{"query_id":"rg-009","resource":"crates/core/flags/parse.rs","start_line":64,"end_line":115,"grade":2,"why":"parse_low() is the top-level entry: argv in, LowArgs out."}
+{"query_id":"rg-009","resource":"crates/core/flags/parse.rs","start_line":161,"end_line":316,"grade":2,"why":"Parser: the lexing loop over argv, handling short/long/negated flags and values."}
+{"query_id":"rg-009","resource":"crates/core/flags/parse.rs","start_line":317,"end_line":403,"grade":1,"why":"FlagMap and FlagLookup: how a flag name resolves to its definition."}
+{"query_id":"rg-010","resource":"crates/core/flags/parse.rs","start_line":404,"end_line":470,"grade":2,"why":"suggest(), find_similar_names() and jaccard_index() over flag-name n-grams: this is the did-you-mean mechanism."}
+{"query_id":"rg-010","resource":"crates/core/flags/parse.rs","start_line":317,"end_line":365,"grade":1,"why":"FlagLookup::UnrecognizedShort/Long is where the miss is detected before suggestion runs."}
+{"query_id":"rg-011","resource":"crates/core/search.rs","start_line":276,"end_line":341,"grade":2,"why":"should_decompress() and search_decompress(): the decision and the dispatch."}
+{"query_id":"rg-011","resource":"crates/cli/src/decompress.rs","start_line":147,"end_line":197,"grade":1,"why":"DecompressionMatcher decides which command matches a path. Supporting."}
+{"query_id":"rg-012","resource":"crates/cli/src/decompress.rs","start_line":490,"end_line":532,"grade":2,"why":"default_decompression_commands(): the literal table of gzip, bzip2, xz, lz4, zstd, brotli and their argv."}
+{"query_id":"rg-012","resource":"crates/cli/src/decompress.rs","start_line":198,"end_line":419,"grade":2,"why":"DecompressionReaderBuilder and DecompressionReader: how the command is spawned and read from."}
+{"query_id":"rg-012","resource":"crates/cli/src/decompress.rs","start_line":420,"end_line":489,"grade":1,"why":"resolve_binary() checks the tool exists on PATH before use."}
+{"query_id":"rg-013","resource":"crates/regex/src/literal.rs","start_line":131,"end_line":439,"grade":2,"why":"Extractor: walks the HIR and pulls out literal sequences, with the cross/union logic and limits."}
+{"query_id":"rg-013","resource":"crates/regex/src/literal.rs","start_line":44,"end_line":130,"grade":2,"why":"InnerLiterals: the entry point that decides whether a prefilter is worth building at all."}
+{"query_id":"rg-013","resource":"crates/regex/src/literal.rs","start_line":440,"end_line":636,"grade":1,"why":"TSeq and is_poisonous: the sequence type and the rules for discarding useless literals."}
+{"query_id":"rg-014","resource":"crates/matcher/src/interpolate.rs","start_line":14,"end_line":63,"grade":2,"why":"interpolate(): scans the replacement for capture references and splices in group contents."}
+{"query_id":"rg-014","resource":"crates/matcher/src/interpolate.rs","start_line":97,"end_line":140,"grade":2,"why":"find_cap_ref(): parses $1, ${name} and the escaping rules."}
+{"query_id":"rg-014","resource":"crates/matcher/src/interpolate.rs","start_line":64,"end_line":96,"grade":1,"why":"CaptureRef and Ref: the parsed representation. Supporting."}
+{"query_id":"rg-015","resource":"crates/printer/src/hyperlink/mod.rs","start_line":99,"end_line":176,"grade":2,"why":"FromStr for HyperlinkFormat: parses the format string with its {path}, {line}, {host} placeholders."}
+{"query_id":"rg-015","resource":"crates/printer/src/hyperlink/mod.rs","start_line":25,"end_line":98,"grade":2,"why":"HyperlinkConfig and HyperlinkFormat: the configured form used at print time."}
+{"query_id":"rg-015","resource":"crates/printer/src/hyperlink/mod.rs","start_line":191,"end_line":285,"grade":1,"why":"Aliases such as file:// and vscode, plus the environment (host, wsl prefix). Supporting."}
+{"query_id":"rg-016","resource":"crates/printer/src/color.rs","start_line":152,"end_line":330,"grade":2,"why":"UserColorSpec and its FromStr: parses the path:fg:red style spec the user passes to --colors."}
+{"query_id":"rg-016","resource":"crates/printer/src/color.rs","start_line":88,"end_line":151,"grade":2,"why":"ColorSpecs: the resolved set the printer consults per output element."}
+{"query_id":"rg-016","resource":"crates/printer/src/color.rs","start_line":10,"end_line":23,"grade":1,"why":"default_color_specs(): the defaults a user spec overrides."}
+{"query_id":"rg-017","resource":"crates/searcher/src/sink.rs","start_line":102,"end_line":339,"grade":2,"why":"The Sink trait: matched, context, context_break, binary_data, begin and finish. This is the interface."}
+{"query_id":"rg-017","resource":"crates/searcher/src/sink.rs","start_line":366,"end_line":470,"grade":2,"why":"SinkMatch and SinkContext: the values handed to the trait methods."}
+{"query_id":"rg-017","resource":"crates/searcher/src/sink.rs","start_line":18,"end_line":60,"grade":1,"why":"SinkError: how an implementation reports failure. Supporting."}
+{"query_id":"rg-018","resource":"crates/printer/src/json.rs","start_line":596,"end_line":846,"grade":2,"why":"JSONSink: implements Sink and emits the begin/match/context/end message stream."}
+{"query_id":"rg-018","resource":"crates/printer/src/jsont.rs","start_line":11,"end_line":168,"grade":2,"why":"The wire types themselves: Message, Begin, End, Match, Context, SubMatch and their serialization."}
+{"query_id":"rg-018","resource":"crates/printer/src/json.rs","start_line":54,"end_line":486,"grade":1,"why":"JSONBuilder: configuration of the printer. Supporting."}
+{"query_id":"rg-019","resource":"crates/printer/src/standard.rs","start_line":1192,"end_line":1428,"grade":2,"why":"StandardImpl::write_line and the matched-line writing path, including match highlighting."}
+{"query_id":"rg-019","resource":"crates/printer/src/standard.rs","start_line":876,"end_line":1191,"grade":2,"why":"StandardImpl: the per-line rendering driver that write_line belongs to."}
+{"query_id":"rg-019","resource":"crates/printer/src/standard.rs","start_line":1594,"end_line":1700,"grade":1,"why":"PreludeWriter: path, line number and column prefix before the line body."}
+{"query_id":"rg-020","resource":"crates/pcre2/src/matcher.rs","start_line":12,"end_line":301,"grade":2,"why":"RegexMatcherBuilder: the full PCRE2 configuration surface, including JIT and UTF options."}
+{"query_id":"rg-020","resource":"crates/pcre2/src/matcher.rs","start_line":302,"end_line":390,"grade":2,"why":"RegexMatcher and its Matcher impl: the adapter that makes PCRE2 usable as a grep matcher."}
+{"query_id":"rg-021","resource":"crates/regex/src/config.rs","start_line":78,"end_line":110,"grade":2,"why":"The smart-case decision: any_literal() && !any_uppercase() over the pattern analysis."}
+{"query_id":"rg-021","resource":"crates/regex/src/config.rs","start_line":25,"end_line":60,"grade":1,"why":"Config::case_smart: the flag being consulted. Supporting."}
+{"query_id":"rg-021","resource":"crates/pcre2/src/matcher.rs","start_line":422,"end_line":440,"grade":1,"why":"has_uppercase_literal(): the same idea implemented separately for the PCRE2 backend."}
+{"query_id":"rg-022","resource":"crates/ignore/src/types.rs","start_line":305,"end_line":400,"grade":2,"why":"TypesBuilder: add(), add_def(), negate() and build() are how --type-add and --type-clear are realised."}
+{"query_id":"rg-022","resource":"crates/ignore/src/types.rs","start_line":165,"end_line":304,"grade":2,"why":"Types::matched(): how a built type set decides select vs ignore for a path."}
+{"query_id":"rg-022","resource":"crates/ignore/src/types.rs","start_line":146,"end_line":164,"grade":1,"why":"FileTypeDef: the name-plus-globs pair. Supporting."}
+{"query_id":"rg-023","resource":"crates/searcher/src/lines.rs","start_line":49,"end_line":169,"grade":2,"why":"LineStep: the cursor that yields successive line ranges within a buffer."}
+{"query_id":"rg-023","resource":"crates/searcher/src/lines.rs","start_line":17,"end_line":48,"grade":2,"why":"LineIter: the iterator wrapper over LineStep."}
+{"query_id":"rg-023","resource":"crates/searcher/src/lines.rs","start_line":170,"end_line":200,"grade":1,"why":"preceding_by_pos(): walking backwards for context lines. Related but not the main answer."}
+{"query_id":"rg-024","resource":"crates/core/search.rs","start_line":284,"end_line":328,"grade":2,"why":"should_preprocess() and search_preprocessor(): spawns the preprocessor command and searches its stdout."}
+{"query_id":"rg-025","resource":"crates/core/search.rs","start_line":342,"end_line":379,"grade":2,"why":"search_path() and search_reader() on the worker: the dispatch between the two entry points."}
+{"query_id":"rg-025","resource":"crates/core/search.rs","start_line":380,"end_line":449,"grade":2,"why":"The free search_path/search_reader functions generic over matcher, printer and reader."}
+{"query_id":"rg-026","resource":"crates/index/src/literal.rs","start_line":320,"end_line":504,"grade":2,"why":"Analysis: turns an HIR into the literal structure the n-gram query is derived from."}
+{"query_id":"rg-026","resource":"crates/index/src/literal.rs","start_line":637,"end_line":759,"grade":2,"why":"GramQueryBuilder: builds the AND/OR n-gram query, with the limits that keep it bounded."}
+{"query_id":"rg-026","resource":"crates/index/src/literal.rs","start_line":16,"end_line":273,"grade":1,"why":"GramQuery: the query representation being produced. Supporting."}
+{"query_id":"rg-027","resource":"crates/ignore/src/gitignore.rs","start_line":234,"end_line":318,"grade":2,"why":"matched_path_or_any_parents() and matched_stripped(): walks up ancestors so an ignored directory hides its contents."}
+{"query_id":"rg-027","resource":"crates/ignore/src/gitignore.rs","start_line":202,"end_line":233,"grade":1,"why":"matched(): the single-path case the parent walk builds on."}
+{"query_id":"rg-028","resource":"crates/ignore/src/gitignore.rs","start_line":581,"end_line":700,"grade":2,"why":"gitconfig_excludes_path() and the env/system/home/xdg lookup chain, plus tilde expansion."}
+{"query_id":"rg-029","resource":"crates/searcher/src/sink.rs","start_line":430,"end_line":470,"grade":2,"why":"SinkContext and SinkContextKind: how a before/after context line is distinguished from a match."}
+{"query_id":"rg-029","resource":"crates/searcher/src/sink.rs","start_line":102,"end_line":339,"grade":1,"why":"The Sink::context and context_break methods that receive them."}
+{"query_id":"rg-030","resource":"crates/ignore/src/walk.rs","start_line":1530,"end_line":1545,"grade":2,"why":"WalkParallel::threads(): resolves the configured thread count for the run."}
+{"query_id":"rg-030","resource":"crates/ignore/src/walk.rs","start_line":765,"end_line":785,"grade":2,"why":"WalkBuilder::threads(): where the caller sets it."}
+{"query_id":"rg-031","resource":"crates/globset/src/lib.rs","start_line":461,"end_line":565,"grade":2,"why":"RequiredExtensionStrategy is built here: extension-only globs are routed to a hash lookup instead of a regex."}
+{"query_id":"rg-031","resource":"crates/globset/src/glob.rs","start_line":49,"end_line":75,"grade":2,"why":"MatchStrategy: the per-glob classification that decides a glob is a bare extension."}
+{"query_id":"rg-031","resource":"crates/globset/src/glob.rs","start_line":160,"end_line":210,"grade":1,"why":"GlobStrategic: applies the chosen strategy for a single glob."}
+{"query_id":"rg-032","resource":"crates/printer/src/jsont.rs","start_line":169,"end_line":220,"grade":2,"why":"Data::from_bytes falls back from Text to Bytes when the input is not UTF-8, and serializes it base64."}
+{"query_id":"rg-032","resource":"crates/printer/src/jsont.rs","start_line":86,"end_line":168,"grade":1,"why":"The message types that route every user-controlled field through Data. Supporting."}
+{"query_id":"rg-033","resource":"crates/searcher/src/searcher/mod.rs","start_line":34,"end_line":118,"grade":2,"why":"vocab-gap for rg-001: same BinaryDetection answer, query avoids the words binary/quit/convert."}
+{"query_id":"rg-033","resource":"crates/searcher/src/line_buffer.rs","start_line":55,"end_line":85,"grade":2,"why":"vocab-gap for rg-001: the underlying BinaryDetection enum."}
+{"query_id":"rg-034","resource":"crates/printer/src/color.rs","start_line":152,"end_line":330,"grade":2,"why":"vocab-gap for rg-016: UserColorSpec parsing, query avoids the words color/spec."}
+{"query_id":"rg-034","resource":"crates/printer/src/color.rs","start_line":88,"end_line":151,"grade":2,"why":"vocab-gap for rg-016: ColorSpecs the printer consults."}
+{"query_id":"rg-035","resource":"crates/regex/src/config.rs","start_line":78,"end_line":110,"grade":2,"why":"vocab-gap for rg-021: the smart-case decision, query avoids case/smart/uppercase."}
+{"query_id":"rg-035","resource":"crates/regex/src/config.rs","start_line":25,"end_line":60,"grade":1,"why":"vocab-gap for rg-021: the case_smart config knob."}
+{"query_id":"rg-036","resource":"crates/ignore/src/walk.rs","start_line":1714,"end_line":1850,"grade":2,"why":"vocab-gap for rg-007: Worker::run, query avoids thread/work/walk."}
+{"query_id":"rg-036","resource":"crates/ignore/src/walk.rs","start_line":1404,"end_line":1529,"grade":2,"why":"vocab-gap for rg-007: WalkParallel::run spawning the pool."}
+{"query_id":"rg-037","resource":"crates/printer/src/hyperlink/mod.rs","start_line":99,"end_line":176,"grade":2,"why":"vocab-gap for rg-015: HyperlinkFormat parsing, query avoids hyperlink/format."}
+{"query_id":"rg-037","resource":"crates/printer/src/hyperlink/mod.rs","start_line":25,"end_line":98,"grade":2,"why":"vocab-gap for rg-015: the configured hyperlink form used at print time."}
+{"query_id":"rg-038","resource":"crates/ignore/src/gitignore.rs","start_line":320,"end_line":457,"grade":2,"why":"vocab-gap for rg-006: GitignoreBuilder, query avoids gitignore/parse."}
+{"query_id":"rg-038","resource":"crates/ignore/src/gitignore.rs","start_line":458,"end_line":580,"grade":2,"why":"vocab-gap for rg-006: add_line, the per-line ignore-syntax parser."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/dir.rs", "start_line": 1, "end_line": 1613, "grade": 2, "why": "The Ignore structure: gitignore semantics and precedence, one matcher per directory pointing at its parent."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/gitignore.rs", "start_line": 1, "end_line": 883, "grade": 2, "why": "Gitignore glob matching, implemented from the gitignore man page rather than shelling out to git."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/overrides.rs", "start_line": 1, "end_line": 293, "grade": 2, "why": "Override globs -- the --include/--exclude style filter."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/types.rs", "start_line": 1, "end_line": 584, "grade": 2, "why": "Associates globs on file names with file types, which is what --type filters on."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/incremental.rs", "start_line": 1, "end_line": 1286, "grade": 2, "why": "IncrementalIgnore: checks individual paths against hierarchical ignore files without a recursive walk."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/default_types.rs", "start_line": 1, "end_line": 378, "grade": 1, "why": "The default file type definitions the type matcher is built from. Data, not logic."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/pathutil.rs", "start_line": 1, "end_line": 171, "grade": 1, "why": "is_hidden() and path helpers the matchers call. Supporting."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/walk.rs", "start_line": 1, "end_line": 2712, "grade": 1, "why": "Applies the filtering decision during traversal -- should_skip_entry(). Consumes the rules rather than defining them."}
+{"query_id": "rg-045", "resource": "crates/ignore/src/lib.rs", "start_line": 1, "end_line": 549, "grade": 1, "why": "Crate root: documents the matching rules and precedence, and re-exports the matchers."}
+{"query_id": "rg-046", "resource": "crates/core/flags/defs.rs", "start_line": 1, "end_line": 8161, "grade": 2, "why": "Defines every flag ripgrep has, one unit struct each."}
+{"query_id": "rg-046", "resource": "crates/core/flags/parse.rs", "start_line": 1, "end_line": 476, "grade": 2, "why": "Parses command line arguments into a structured and typed representation."}
+{"query_id": "rg-046", "resource": "crates/core/flags/lowargs.rs", "start_line": 1, "end_line": 735, "grade": 2, "why": "The low-level argument representation flags parse into."}
+{"query_id": "rg-046", "resource": "crates/core/flags/hiargs.rs", "start_line": 1, "end_line": 1516, "grade": 2, "why": "The high-level arguments built from the low-level ones; the contact point with the supporting libraries."}
+{"query_id": "rg-046", "resource": "crates/core/flags/config.rs", "start_line": 1, "end_line": 176, "grade": 2, "why": "Reads ripgrep's config rc files and turns them into a sequence of arguments."}
+{"query_id": "rg-046", "resource": "crates/core/flags/mod.rs", "start_line": 1, "end_line": 309, "grade": 1, "why": "Module root defining the CLI as a whole and tying the pieces together."}
+{"query_id": "rg-046", "resource": "crates/core/flags/doc/help.rs", "start_line": 1, "end_line": 277, "grade": 1, "why": "Generates the short and long help output from the flag definitions."}
+{"query_id": "rg-046", "resource": "crates/core/flags/doc/man.rs", "start_line": 1, "end_line": 116, "grade": 1, "why": "Generates the man page in roff format from the flag definitions."}
+{"query_id": "rg-046", "resource": "crates/core/flags/doc/version.rs", "start_line": 1, "end_line": 173, "grade": 1, "why": "Generates version strings."}
+{"query_id": "rg-046", "resource": "crates/core/flags/complete/bash.rs", "start_line": 1, "end_line": 107, "grade": 1, "why": "Generates bash completions from the flag definitions."}
+{"query_id": "rg-047", "resource": "crates/searcher/src/searcher/mod.rs", "start_line": 1, "end_line": 1088, "grade": 2, "why": "The Searcher itself and its configuration -- the entry point for running a search."}
+{"query_id": "rg-047", "resource": "crates/searcher/src/searcher/core.rs", "start_line": 1, "end_line": 713, "grade": 2, "why": "Core: the shared match-stepping logic, fast and slow match paths, binary detection and context handling."}
+{"query_id": "rg-047", "resource": "crates/searcher/src/searcher/glue.rs", "start_line": 1, "end_line": 1549, "grade": 2, "why": "ReadByLine and its siblings: the drivers pairing a reader or slice with Core."}
+{"query_id": "rg-047", "resource": "crates/searcher/src/line_buffer.rs", "start_line": 1, "end_line": 965, "grade": 2, "why": "Buffered reading, including behaviour in the face of long lines and big contexts."}
+{"query_id": "rg-047", "resource": "crates/searcher/src/lines.rs", "start_line": 1, "end_line": 466, "grade": 2, "why": "Routines for operating on lines -- iteration and stepping within a slice."}
+{"query_id": "rg-047", "resource": "crates/searcher/src/sink.rs", "start_line": 1, "end_line": 663, "grade": 2, "why": "The Sink trait: how matches, context and completion are reported to the caller."}
+{"query_id": "rg-047", "resource": "crates/searcher/src/searcher/mmap.rs", "start_line": 1, "end_line": 124, "grade": 1, "why": "The strategy for deciding when to use memory maps. Supporting."}
+{"query_id": "rg-047", "resource": "crates/searcher/src/lib.rs", "start_line": 1, "end_line": 106, "grade": 1, "why": "Crate root and re-exports. Supporting."}

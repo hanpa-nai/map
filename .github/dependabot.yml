@@ -1,0 +1,22 @@
+version: 2
+
+# Actions in ci.yml are pinned to commit SHAs rather than tags, so nothing
+# updates them on its own. That is the point -- a mutable `@v2` lets whoever
+# controls that branch decide what runs in CI -- but a pin with no maintenance
+# is just a frozen dependency nobody notices. This is the other half.
+#
+# Dependabot reads the `# vX.Y.Z` comment beside each SHA, and rewrites both
+# the SHA and the comment when it opens a PR. Losing that comment would leave
+# the pins opaque and unmaintained, so keep it when editing by hand.
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Cargo is deliberately absent. Advisories are already watched by the
+  # `supply chain` job in ci.yml, which fails only on critical vulnerabilities,
+  # and the lockfile is load-bearing for determinism: the golden hashes in the
+  # eval baselines and the run-twice byte-identity test are all measured
+  # against pinned dependency versions. A weekly bump PR would churn those for
+  # no gain. Update Cargo dependencies deliberately, and re-measure.

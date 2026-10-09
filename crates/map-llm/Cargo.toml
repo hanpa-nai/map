@@ -1,0 +1,19 @@
+[package]
+name = "map-llm"
+description = "Orthogonal LLM adapter: connection management and structured chat calls."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.19"
+toml = "1.0.7"
+ureq = { version = "2.10", features = ["json"] }

@@ -1,0 +1,47 @@
+{"id":"rg-001","text":"binary detection quit convert byte","kind":"mechanism","form":"keyword","facet":"anchor"}
+{"id":"rg-002","text":"Handling a line longer than the read buffer by rolling unconsumed bytes to the front and growing capacity.","kind":"mechanism","form":"prose","facet":"concept"}
+{"id":"rg-003","text":"How does ripgrep decide whether to memory-map a file instead of reading it incrementally?","kind":"mechanism","form":"question","facet":"concept"}
+{"id":"rg-004","text":"glob compile regex GlobMatcher","kind":"locate","form":"keyword","facet":"anchor"}
+{"id":"rg-005","text":"Matching a path against many globs using bucketed strategies instead of testing every regex.","kind":"mechanism","form":"prose","facet":"concept"}
+{"id":"rg-006","text":"gitignore parse GitignoreBuilder add_line","kind":"locate","form":"keyword","facet":"anchor"}
+{"id":"rg-007","text":"How is work distributed across threads when walking a directory tree?","kind":"mechanism","form":"question","facet":"concept"}
+{"id":"rg-008","text":"default file types table rust python markdown","kind":"locate","form":"keyword","facet":"anchor"}
+{"id":"rg-009","text":"Parsing command line arguments into a structured low-level form.","kind":"mechanism","form":"prose","facet":"concept"}
+{"id":"rg-010","text":"What happens when the user passes a flag that does not exist? Does it suggest a correction?","kind":"behavior","form":"question","facet":"concept"}
+{"id":"rg-011","text":"Where does ripgrep decide to run a decompression command on a file before searching it?","kind":"locate","form":"question","facet":"distributed"}
+{"id":"rg-012","text":"decompression commands gzip bzip2 xz zstd","kind":"locate","form":"keyword","facet":"anchor"}
+{"id":"rg-013","text":"Extracting literal strings from a regex to build a fast prefilter for searching.","kind":"mechanism","form":"prose","facet":"concept"}
+{"id":"rg-014","text":"How does a replacement string like $1 get expanded with capture group contents?","kind":"mechanism","form":"question","facet":"concept"}
+{"id":"rg-015","text":"Configuring and formatting terminal hyperlinks in the output.","kind":"mechanism","form":"prose","facet":"concept"}
+{"id":"rg-016","text":"color specs user customize UserColorSpec","kind":"behavior","form":"keyword","facet":"anchor"}
+{"id":"rg-017","text":"The trait a caller implements to receive matches, context lines, and binary events from the searcher.","kind":"interface","form":"prose","facet":"concept"}
+{"id":"rg-018","text":"Where is the JSON output format produced?","kind":"locate","form":"question","facet":"concept"}
+{"id":"rg-019","text":"Where does the standard human-readable printer write a matching line?","kind":"locate","form":"question","facet":"concept"}
+{"id":"rg-020","text":"pcre2 matcher backend RegexMatcher","kind":"locate","form":"keyword","facet":"anchor"}
+{"id":"rg-021","text":"How does smart case work? Where is it decided that a pattern contains an uppercase letter?","kind":"mechanism","form":"question","facet":"distributed"}
+{"id":"rg-022","text":"Building user-defined file type filters from --type-add and --type-clear.","kind":"mechanism","form":"prose","facet":"concept"}
+{"id":"rg-023","text":"line step iterate buffer LineStep boundaries","kind":"mechanism","form":"keyword","facet":"anchor"}
+{"id":"rg-024","text":"Running a preprocessor command on a file and searching its output before the normal search.","kind":"locate","form":"prose","facet":"concept"}
+{"id":"rg-025","text":"How does the searcher dispatch between searching a path and searching an arbitrary reader?","kind":"mechanism","form":"question","facet":"concept"}
+{"id":"rg-026","text":"Turning a regex into an n-gram query for the experimental index.","kind":"mechanism","form":"prose","facet":"concept"}
+{"id":"rg-027","text":"How does gitignore matching consider parent directories, not just the file itself?","kind":"mechanism","form":"question","facet":"concept"}
+{"id":"rg-028","text":"gitconfig excludes global path","kind":"locate","form":"keyword","facet":"anchor"}
+{"id":"rg-029","text":"Reporting context lines before and after a match, distinguished from the match itself.","kind":"interface","form":"prose","facet":"concept"}
+{"id":"rg-030","text":"worker threads count chosen","kind":"locate","form":"keyword","facet":"anchor"}
+{"id":"rg-031","text":"required extension strategy glob hash lookup","kind":"mechanism","form":"keyword","facet":"anchor"}
+{"id":"rg-032","text":"Emitting data that is not valid UTF-8 in the JSON output by falling back to bytes.","kind":"mechanism","form":"prose","facet":"concept"}
+{"id":"rg-033","text":"compiled artifact skip scan not source","kind":"mechanism","form":"keyword","facet":"vocab-gap"}
+{"id":"rg-034","text":"Letting a user restyle the highlighting of results with their own palette.","kind":"behavior","form":"prose","facet":"vocab-gap"}
+{"id":"rg-035","text":"How is letter casing ignored automatically when a pattern is entirely lowercase?","kind":"mechanism","form":"question","facet":"vocab-gap"}
+{"id":"rg-036","text":"Spreading directory traversal across several CPU cores.","kind":"mechanism","form":"prose","facet":"vocab-gap"}
+{"id":"rg-037","text":"How are file paths turned into clickable links in a supporting terminal?","kind":"mechanism","form":"question","facet":"vocab-gap"}
+{"id":"rg-038","text":"Respecting the exclude patterns a project defines to skip files during listing.","kind":"mechanism","form":"prose","facet":"vocab-gap"}
+{"id":"rg-039","text":"sql database connection pool","kind":"absent","form":"keyword","facet":"absent","absent_in":["ripgrep"]}
+{"id":"rg-040","text":"Establishing a pooled connection to a SQL database with retry and backoff.","kind":"absent","form":"prose","facet":"absent","absent_in":["ripgrep"]}
+{"id":"rg-041","text":"How does it schedule pods onto Kubernetes nodes?","kind":"absent","form":"question","facet":"absent","absent_in":["ripgrep","flask"]}
+{"id":"rg-042","text":"gpu shader compilation pipeline","kind":"absent","form":"keyword","facet":"absent","absent_in":["ripgrep","flask"]}
+{"id":"rg-043","text":"Resampling an audio waveform to a different sample rate.","kind":"absent","form":"prose","facet":"absent","absent_in":["ripgrep","flask"]}
+{"id":"rg-044","text":"Where is the HTTP request routing middleware defined?","kind":"absent","form":"question","facet":"absent","absent_in":["ripgrep"]}
+{"id": "rg-045", "text": "What are all the parts of ripgrep's path filtering? I need every piece involved in deciding that a file or directory should be skipped.", "kind": "component", "form": "question", "facet": "component"}
+{"id": "rg-046", "text": "Show me everything that makes up ripgrep's command line interface: where flags are defined, parsed, read from config files, and turned into help and man pages.", "kind": "component", "form": "prose", "facet": "component"}
+{"id": "rg-047", "text": "What are all the parts of ripgrep's search execution? Everything that reads a file, splits it into lines, and reports matches.", "kind": "component", "form": "question", "facet": "component"}

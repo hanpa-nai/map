@@ -1,0 +1,47 @@
+[package]
+name = "map-embed"
+description = "Pure-Rust embedding inference and pinned model cache."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The distilled embedder is an OPTIONAL plugin. The free, zero-config install is
+# lexical-only and builds with `default = []`: no tokenizer, no safetensors
+# reader, none of the weight-loading tree. The `distilled` feature adds the
+# real-weights loader; all three deps it pulls are pure-Rust (tokenizers with
+# onig disabled, since the BGE tokenizer is Bert*-only and needs no regex
+# backend).
+[features]
+default = []
+distilled = ["dep:tokenizers", "dep:safetensors", "dep:serde", "dep:serde_json"]
+# Downloading the weights is a separate opt-in from being able to load them, so
+# a `distilled` build links no HTTP stack and cannot reach the network at all.
+# Only `map model fetch` ever calls it; indexing never downloads.
+auto-distilled = ["distilled", "dep:ureq", "dep:sha2", "dep:thiserror"]
+
+[dependencies]
+map-core = { version = "0.0.0", path = "../map-core" }
+map-format = { version = "0.0.0", path = "../map-format" }
+
+# fancy-regex is the pure-Rust regex backend; the alternative (onig) is native
+# C and ruled out by MAP's no-native-libs decision. The BGE tokenizer is
+# Bert*-only and touches no regex at runtime anyway — this just satisfies the
+# crate's build-time backend requirement.
+tokenizers = { version = "0.21", optional = true, default-features = false, features = ["fancy-regex"] }
+safetensors = { version = "0.4", optional = true }
+serde = { version = "1.0.229", optional = true, features = ["derive"] }
+serde_json = { version = "1.0.151", optional = true }
+
+# `auto-distilled` only. ureq is the same pure-Rust client map-llm already uses.
+# sha2 is RustCrypto's pure-Rust SHA-256: the digests are pinned in sha256 so
+# they can be checked against HuggingFace's own metadata, or with `sha256sum`,
+# without trusting anything in this repository.
+ureq = { version = "2.10", optional = true }
+sha2 = { version = "0.10", optional = true }
+thiserror = { version = "2.0.19", optional = true }

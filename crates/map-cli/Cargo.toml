@@ -1,0 +1,43 @@
+[package]
+name = "map-cli"
+description = "The map command-line interface."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# The crate is map-cli (crates.io namespace), but the installed binary is
+# `map` — that is the name users type and the name the docs use.
+[[bin]]
+name = "map"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# `distilled` turns on the optional dense embedder plugin end to end. The
+# default `map` binary is lexical-only and carries no model.
+[features]
+default = []
+distilled = ["map-index/distilled", "map-query/distilled"]
+# Adds `map model fetch`. Separate from `distilled` so a build that can load
+# weights still links no HTTP stack unless downloading was asked for.
+auto-distilled = [
+    "distilled",
+    "dep:map-embed",
+    "map-embed/auto-distilled",
+    "map-index/auto-distilled",
+]
+llm = ["map-index/llm", "dep:map-llm"]
+
+[dependencies]
+clap = { version = "4.5.61", features = ["derive"] }
+map-core = { version = "0.0.0", path = "../map-core" }
+map-embed = { version = "0.0.0", path = "../map-embed", optional = true }
+map-format = { version = "0.0.0", path = "../map-format" }
+map-index = { version = "0.0.0", path = "../map-index" }
+map-llm = { version = "0.0.0", path = "../map-llm", optional = true }
+map-query = { version = "0.0.0", path = "../map-query" }
+thiserror = "2.0.19"

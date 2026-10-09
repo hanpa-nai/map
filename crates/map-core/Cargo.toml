@@ -1,0 +1,18 @@
+[package]
+name = "map-core"
+description = "Stage traits, dimension bundle, and pipeline orchestration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+map-format = { version = "0.0.0", path = "../map-format" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.19"
