@@ -979,6 +979,23 @@ fn load_embedder(_implementation: &str) -> Option<Arc<dyn Embedder>> {
     None
 }
 
+/// Whether a query on a dimension whose embedder is `implementation` can be
+/// encoded here: the plugin is compiled in and its model files are on disk.
+///
+/// A test of presence, not a load. It is for a caller that reports what can
+/// be searched without searching, where loading 129 MB of weights to print a
+/// line would be the whole cost of the command.
+#[cfg(feature = "distilled")]
+pub fn embedder_available(implementation: &str) -> bool {
+    implementation == "distilled"
+        && map_embed::distilled::present(&map_embed::distilled::model_dir())
+}
+
+#[cfg(not(feature = "distilled"))]
+pub fn embedder_available(_implementation: &str) -> bool {
+    false
+}
+
 /// Roots listed in `~/.map/config.toml`.
 ///
 /// User-global rather than committed: which repositories you search is a

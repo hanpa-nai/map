@@ -57,6 +57,16 @@ pub fn model_dir() -> std::path::PathBuf {
     home.join(".map").join("models").join(MODEL_ID)
 }
 
+/// Whether the three files [`DistilledEmbedder::from_dir`] reads are in `dir`.
+///
+/// Presence only. It is for a caller that has to say whether a query can be
+/// encoded and must not pay for the load to find out: the weights are 129 MB.
+pub fn present(dir: &Path) -> bool {
+    ["config.json", "model.safetensors", "tokenizer.json"]
+        .iter()
+        .all(|name| dir.join(name).is_file())
+}
+
 /// A loaded static distilled embedder: weight table plus its tokenizer.
 pub struct DistilledEmbedder {
     matrix: StaticMatrix,
@@ -255,6 +265,22 @@ mod tests {
 
     fn cosine(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b).map(|(x, y)| x * y).sum()
+    }
+
+    #[test]
+    fn a_model_is_present_only_when_every_file_the_loader_reads_is_there() {
+        let dir = std::env::temp_dir().join(format!("map-embed-present-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!present(&dir));
+
+        std::fs::write(dir.join("config.json"), "{}").unwrap();
+        std::fs::write(dir.join("tokenizer.json"), "{}").unwrap();
+        assert!(!present(&dir), "the weights are missing");
+
+        std::fs::write(dir.join("model.safetensors"), "").unwrap();
+        assert!(present(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

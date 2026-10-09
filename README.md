@@ -14,7 +14,7 @@ type of a resource. Discovery reads a directory tree, and the segmenter cuts
 line windows. The prompts and the dimension descriptions of a corpus tell a
 model the type of its material.
 
-> **Status: alpha (`v0.0.1`).** The format on disk is a draft and can change.
+> **Status: alpha (`v0.0.2`).** The format on disk is a draft and can change.
 > See [`spec/format-v1.md`](spec/format-v1.md). MAP is not on crates.io. Build
 > it from source.
 
@@ -121,10 +121,10 @@ Release binary size on Windows, measured (1 MB = 1,000,000 bytes):
 
 | binary | size |
 |---|---|
-| default (`lexical` + `declaration`) | **4.26 MB** |
-| `distilled` | 7.30 MB |
-| `auto-distilled` | 9.87 MB |
-| all features | **10.13 MB** |
+| default (`lexical` + `declaration`) | **4.27 MB** |
+| `distilled` | 7.31 MB |
+| `auto-distilled` | 9.88 MB |
+| all features | **10.14 MB** |
 
 `auto-distilled` adds 2.57 MB to `distilled`. The TLS stack is the cause.
 
@@ -144,18 +144,23 @@ necessary. A build of the default binary is 40 s to 80 s on a laptop.
 `map upgrade` replaces only a binary that `cargo install` installed. For a
 different binary, the command changes no files and shows the install command.
 
-During the build, the installed binary has the name `map.old` (`map.exe.old`
-on Windows). If cargo stops with an error, `map upgrade` gives the binary its
-initial name again. If you stop the command during the build, no `map` binary is on
-`PATH`. The command prints the two paths before the build starts. Move the
-file back to its initial name.
+The installed binary stays in its location during the build, and you can use
+it. After the build, `map upgrade` replaces it. If cargo stops with an error,
+or if you stop the command, the installed binary does not change.
+
+On Windows, a `map.exe.old` file stays in the `bin` directory after an
+upgrade. The next start of `map` removes it.
+
+`map upgrade` builds in a temporary directory. Thus `cargo install --list`
+continues to show the version of the last `cargo install`. `map --version`
+shows the version of the binary.
 
 `map --version` shows the version, the commit, and the features of the
 installed binary:
 
 ```console
 $ map --version
-map 0.0.1 (<commit> <date of the commit>)
+map <version> (<commit> <date of the commit>)
 features: none
 upgrade:  map upgrade
           or: cargo install --git https://github.com/hanpa-nai/map map-cli --locked
@@ -165,6 +170,11 @@ Version 0.0.0 has no `upgrade` command. To upgrade from 0.0.0, run the install
 command one more time, with the same `--features` as in the first install.
 After that, use `map upgrade`.
 
+Version 0.0.1 renames the installed binary before the build. If you stop an
+upgrade from 0.0.1 during the build, no `map` binary is on `PATH`. The command
+prints the two paths before the build starts. Move the file back to its
+initial name.
+
 Use `map upgrade`, not the install command, when your machine has a
 `CARGO_TARGET_DIR` setting. With a permanent target directory, cargo can keep
 the previous binary and print `Replaced package`. `map upgrade` always builds
@@ -172,10 +182,10 @@ in a new directory.
 
 ### After an upgrade
 
-- **No index build is necessary after an upgrade from 0.0.0 to 0.0.1.** The
-  two versions make the same objects for the same resources. Each of the two
-  versions reads an index that the other version made, and it gives the same
-  hits.
+- **No index build is necessary after an upgrade from 0.0.0 or 0.0.1 to
+  0.0.2.** The three versions make the same objects for the same resources.
+  Version 0.0.2 reads an index that 0.0.0 or 0.0.1 made, and it gives the same
+  hits. Each of those two versions also reads an index that 0.0.2 made.
 - **`map index` changes one line.** It writes the version of the binary into
   the provenance line of `manifest.json`. `map find -u` writes that line only
   when it does an index build. It does no index build when the index is not
@@ -278,12 +288,13 @@ three update rules:
 
 | index | rule for the agent |
 |---|---|
-| All dimensions are offline, and the binary has the feature for each stage | Use `map find -u` on the first search after an edit. The update has no cost. |
+| All dimensions are offline, and the binary can run all stages | Use `map find -u` on the first search after an edit. The update has no cost. |
 | A dimension uses the `llm` classifier | Do not update the index unless the user gives approval, because each LLM call has a cost. |
-| The binary does not have the feature for a stage of a dimension | Do not update the index. |
+| The binary cannot run a stage of a dimension | Do not update the index. |
 
-`map brief` examines the cargo features of the binary. It does not examine the
-model files in `~/.map/models`.
+A binary cannot run the embedder stage when it does not have the `distilled`
+feature, or when the model files are not in `~/.map/models`. `map brief`
+examines the two conditions. It does not load the model.
 
 An update changes files in `.map/`. Commit those files together with the
 changes to your resources.
@@ -1032,7 +1043,7 @@ To do this check, each process hashes all packs of the index. On ripgrep, the
 check is approximately 4 ms for the two default packs (2.4 MB) and
 approximately 17 ms for all four packs (13.0 MB).
 
-The binary is **4.26 MB** by default and **10.13 MB** with all features. See
+The binary is **4.27 MB** by default and **10.14 MB** with all features. See
 [Install](#install) for the size of each feature.
 
 ## Development

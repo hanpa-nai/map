@@ -53,6 +53,9 @@ pub(crate) struct Facts {
     pub dimensions: Vec<Dimension>,
     pub segment_lines: usize,
     pub has_fabricator: bool,
+    /// Whether this binary has the `distilled` plugin. It decides which of
+    /// two things a dimension that is not searchable is missing.
+    pub embedder_compiled: bool,
     pub state: State,
 }
 
@@ -91,7 +94,12 @@ fn facts(config: &Config, state: State) -> Facts {
         .map(|(name, dimension)| Dimension {
             name: name.clone(),
             description: dimension.description.clone(),
-            searchable: dimension.embedder.is_none() || cfg!(feature = "distilled"),
+            // The model files are part of the answer: the plugin without
+            // them encodes nothing, and the query stops with an error.
+            searchable: dimension
+                .embedder
+                .as_ref()
+                .is_none_or(|e| map_query::embedder_available(&e.implementation)),
             calls_llm: dimension
                 .classifier
                 .as_ref()
@@ -102,6 +110,7 @@ fn facts(config: &Config, state: State) -> Facts {
         dimensions,
         segment_lines: config.segmenter.lines,
         has_fabricator: config.active().any(|(_, d)| d.fabricator.is_some()),
+        embedder_compiled: cfg!(feature = "distilled"),
         state,
     }
 }
@@ -172,10 +181,12 @@ pub(crate) fn render(facts: &Facts) -> String {
         ));
     }
     if !unavailable.is_empty() {
-        line(&format!(
-            "Not available in this binary (the `distilled` feature is necessary): {}",
-            unavailable.join(", ")
-        ));
+        let cause = if facts.embedder_compiled {
+            "Not available on this machine (the embedding model is not installed)"
+        } else {
+            "Not available in this binary (the `distilled` feature is necessary)"
+        };
+        line(&format!("{cause}: {}", unavailable.join(", ")));
     }
     line("");
 
@@ -278,6 +289,7 @@ mod tests {
             dimensions,
             segment_lines: 40,
             has_fabricator: false,
+            embedder_compiled: false,
             state: State::Current,
         }
     }
@@ -366,6 +378,23 @@ path = \"C:/nowhere\"
         assert!(text.contains("this binary cannot update this index"));
         assert!(text.contains("Do not use `--degraded allow`."));
         assert!(!text.contains("has no cost"));
+    }
+
+    #[test]
+    fn a_missing_model_is_named_when_the_binary_has_the_embedder() {
+        // "Build with the `distilled` feature" would send the owner of a
+        // `distilled` binary in a circle. What is missing there is the model.
+        let mut dense = dimension("semantic", "content");
+        dense.searchable = false;
+        let mut facts = facts_with(vec![dimension("lexical", "words"), dense]);
+        facts.embedder_compiled = true;
+        let text = render(&facts);
+
+        assert!(text.contains(
+            "Not available on this machine (the embedding model is not installed): `semantic`"
+        ));
+        assert!(!text.contains("feature is necessary"));
+        assert!(!text.contains("-d 'semantic="));
     }
 
     #[test]

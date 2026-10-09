@@ -21,9 +21,9 @@ default = []
 distilled = ["map-query/distilled"]
 
 [dependencies]
-map-core = { version = "0.0.1", path = "../map-core" }
-map-query = { version = "0.0.1", path = "../map-query" }
-map-stages = { version = "0.0.1", path = "../map-stages" }
+map-core = { version = "0.0.2", path = "../map-core" }
+map-query = { version = "0.0.2", path = "../map-query" }
+map-stages = { version = "0.0.2", path = "../map-stages" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 

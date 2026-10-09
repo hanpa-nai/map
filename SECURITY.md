@@ -65,8 +65,9 @@ These problems are in the scope:
 - **`map upgrade` installs code from an incorrect source.** `map upgrade` runs
   `git ls-remote` and `cargo install`. cargo gets the MAP source from the
   repository URL that is in the binary, or from the `--git` URL. It gets the
-  dependencies of `Cargo.lock` from crates.io. After the install,
-  `map upgrade` runs the new binary with `-V`. It is a vulnerability if
+  dependencies of `Cargo.lock` from crates.io. After the build,
+  `map upgrade` runs the new binary with `-V`. Then it replaces the installed
+  binary. It is a vulnerability if
   `map upgrade` gets the source from a different location, or if it runs a
   different program.
 

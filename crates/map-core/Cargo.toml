@@ -12,7 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-map-format = { version = "0.0.1", path = "../map-format" }
+map-format = { version = "0.0.2", path = "../map-format" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.19"

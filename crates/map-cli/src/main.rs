@@ -157,8 +157,9 @@ enum Command {
     ///
     /// The command runs `cargo install` with the cargo features of this
     /// binary. It builds MAP from source. Thus Rust and a network connection
-    /// are necessary. If this binary is the newest version, the command
-    /// changes no files.
+    /// are necessary. This binary stays in its location until the build is
+    /// complete. If this binary is the newest version, the command changes no
+    /// files.
     Upgrade {
         /// Get the source from this git repository. Default: the MAP
         /// repository.
