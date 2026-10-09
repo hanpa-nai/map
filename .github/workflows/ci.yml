@@ -28,7 +28,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install toolchain
         run: rustup show  # honours rust-toolchain.toml
@@ -67,7 +67,7 @@ jobs:
       # Keep in step with `rust-version` in the workspace Cargo.toml.
       MSRV: "1.88"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # `rust-toolchain.toml` pins stable, which a `+toolchain` argument
       # overrides. Without this job the declared `rust-version` is a claim
       # nothing checks, and CI would keep testing only the newest stable.
@@ -92,7 +92,7 @@ jobs:
       contents: read
       checks: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pinned to the released tag. `main` carries an unreleased Node 24 bump
       # that would silence this job's deprecation notice, but running untagged
       # code on the job whose purpose is supply-chain assurance is the wrong
