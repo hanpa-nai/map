@@ -1000,6 +1000,13 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
     }
 
     let levels = parse_levels(&args.level)?;
+    // A request for cluster levels on an index that never built any is the one
+    // "no matches" that is a property of the index, not the query.
+    let asks_above_zero = match &levels {
+        map_query::LevelFilter::Segments | map_query::LevelFilter::All => false,
+        map_query::LevelFilter::Clusters => true,
+        map_query::LevelFilter::Only(set) => !set.contains(&0),
+    };
 
     // `--path` is always a member, so a bare `map find` and a federated one go
     // through the same code and cannot drift.
@@ -1012,6 +1019,9 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
 
     if hits.is_empty() {
         println!("no matches");
+        if asks_above_zero && index.cluster_count() == 0 {
+            eprintln!("map: this index has no clusters, so no level above 0 can match");
+        }
         // Worth saying precisely here: "no matches" on a stale index is the
         // case most likely to be a wrong answer rather than a true negative.
         report_staleness(&args);

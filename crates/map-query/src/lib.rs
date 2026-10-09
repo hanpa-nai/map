@@ -620,6 +620,14 @@ impl Index {
         &self.dimensions
     }
 
+    /// How many cluster records the manifest reaches, across every dimension.
+    ///
+    /// Zero means no fabricator has built a tree here, so every level above 0
+    /// is empty whatever `--level` asks for.
+    pub fn cluster_count(&self) -> usize {
+        self.manifest.as_ref().map_or(0, |m| m.clusters.len())
+    }
+
     pub fn load_path(&self) -> LoadPath {
         self.load_path
     }
@@ -1093,6 +1101,11 @@ impl Federation {
             all.extend(index.dimensions.iter().map(String::as_str));
         }
         all.into_iter().map(str::to_owned).collect()
+    }
+
+    /// Cluster records across every member; see [`Index::cluster_count`].
+    pub fn cluster_count(&self) -> usize {
+        self.indexes.iter().map(Index::cluster_count).sum()
     }
 
     /// Run an N-dimensional query over segments across every index.
