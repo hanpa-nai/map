@@ -20,9 +20,9 @@ llm = ["dep:map-llm"]
 [dependencies]
 getrandom = "0.2"
 ignore = "0.4.30"
-map-core = { version = "0.0.2", path = "../map-core" }
-map-format = { version = "0.0.2", path = "../map-format" }
-map-llm = { version = "0.0.2", path = "../map-llm", optional = true }
+map-core = { version = "0.0.3", path = "../map-core" }
+map-format = { version = "0.0.3", path = "../map-format" }
+map-llm = { version = "0.0.3", path = "../map-llm", optional = true }
 memmap2 = "0.9.11"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

@@ -64,19 +64,26 @@ Rules:
   `declaration` dimension ranks the declaration above the callers.
 - **The short form** `map find "text"` searches `lexical` only.
 - **Start with `-n 5 --snippet`.** `--snippet` prints the first 12 lines of
-  each hit. Thus you can examine a hit before you read the file.
+  each hit, with their line numbers. Thus you can select a hit before you read
+  the file. `--snippet=5` prints 5 lines. Write the number with `=`.
 
 ## 3. Read the result
 
 ```
-crates/searcher/src/searcher/mod.rs:33  0.793  [declaration 0.67, lexical 0.92]
+crates/searcher/src/searcher/mod.rs:33  0.793  [declaration 0.67, lexical 0.92]  (also 769, 833)
 ```
 
 - `path:line` is the location. The line is the first line of a segment. A
   segment has 40 lines by default.
 - The match can be on a line that is not the first line of the segment.
-  `--snippet` shows only the first 12 lines. If that output does not show the
-  match, read 40 lines of the file from that line.
+  `--snippet` shows only the first lines. A `[TRUNCATED ...]` line tells
+  you that the hit has more lines, before or after the lines that you see.
+  The last `[TRUNCATED ...]` line of a hit gives the lines to read. If the
+  `--snippet` output does not show the match, read those lines. Do not search
+  again before you read them.
+- A hit can end with a note. `(lines A-B)` is the full range of a hit that
+  has more than one segment. `(also N, N)` gives the lines of other matches in
+  the same file, because one file has a maximum of two hits.
 - The number after the location is the fused score, from 0 to 1.
 - The values in `[...]` are the scores of each dimension.
 - A line that starts with `cluster L1` is a cluster, not a file. Add

@@ -713,7 +713,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "map-cli"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clap",
  "map-core",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "map-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "map-format",
  "serde",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "map-embed"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "map-core",
  "map-format",
@@ -752,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "map-eval"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "map-core",
  "map-query",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "map-format"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blake3",
  "serde",
@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "map-index"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "map-core",
  "map-embed",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "map-llm"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "map-query"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "map-core",
  "map-embed",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "map-stages"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "getrandom 0.2.17",
  "ignore",

@@ -14,7 +14,7 @@ type of a resource. Discovery reads a directory tree, and the segmenter cuts
 line windows. The prompts and the dimension descriptions of a corpus tell a
 model the type of its material.
 
-> **Status: alpha (`v0.0.2`).** The format on disk is a draft and can change.
+> **Status: alpha (`v0.0.3`).** The format on disk is a draft and can change.
 > See [`spec/format-v1.md`](spec/format-v1.md). MAP is not on crates.io. Build
 > it from source.
 
@@ -25,14 +25,20 @@ model the type of its material.
 
 ## Quick start
 
-Build the index one time:
+Install the binary. Rust is necessary (see [Install](#install)):
+
+```console
+$ cargo install --git https://github.com/hanpa-nai/map map-cli --locked
+```
+
+Build the index one time, in the root of your repository:
 
 ```console
 $ map init && map index
 $ map find "binary detection" -n 3
 crates/core/search.rs:129  0.936
 crates/core/flags/hiargs.rs:1185  0.931
-crates/searcher/src/searcher/mod.rs:33  0.920
+crates/searcher/src/searcher/mod.rs:33  0.920  (lines 33-104; also 769)
 ```
 
 Commit `.map/`. After that, each clone can search **with no index build**. It
@@ -43,7 +49,7 @@ $ git clone git@github.com:you/your-repo.git && cd your-repo
 $ map find "binary detection" -n 3
 crates/core/search.rs:129  0.936
 crates/core/flags/hiargs.rs:1185  0.931
-crates/searcher/src/searcher/mod.rs:33  0.920
+crates/searcher/src/searcher/mod.rs:33  0.920  (lines 33-104; also 769)
 ```
 
 For the default binary, no API key, no network, and no model download are
@@ -67,7 +73,7 @@ and the model writes text in it. One call can use one dimension or more.
 
 | | |
 |---|---|
-| **A smaller number of tokens** | One call gets the answer for a query that has N dimensions. A sequence of search steps is not necessary. |
+| **One call for N dimensions** | One call searches each dimension that has text, and it gives one list of positions. A hit shows the position at which to start to read. A subsequent search can be necessary. |
 | **A smaller context** | A cluster label gives the structure of a topic before its content. |
 | **Accurate results** | MAP calculates the score of each dimension with the method for that dimension. Then it fuses the scores. |
 | **One index for all users** | You commit the index. One person builds it, and all users read it. |
@@ -121,10 +127,10 @@ Release binary size on Windows, measured (1 MB = 1,000,000 bytes):
 
 | binary | size |
 |---|---|
-| default (`lexical` + `declaration`) | **4.27 MB** |
-| `distilled` | 7.31 MB |
-| `auto-distilled` | 9.88 MB |
-| all features | **10.14 MB** |
+| default (`lexical` + `declaration`) | **4.33 MB** |
+| `distilled` | 7.37 MB |
+| `auto-distilled` | 9.94 MB |
+| all features | **10.20 MB** |
 
 `auto-distilled` adds 2.57 MB to `distilled`. The TLS stack is the cause.
 
@@ -182,10 +188,14 @@ in a new directory.
 
 ### After an upgrade
 
-- **No index build is necessary after an upgrade from 0.0.0 or 0.0.1 to
-  0.0.2.** The three versions make the same objects for the same resources.
-  Version 0.0.2 reads an index that 0.0.0 or 0.0.1 made, and it gives the same
-  hits. Each of those two versions also reads an index that 0.0.2 made.
+- **No index build is necessary after an upgrade from a previous version to
+  0.0.3.** Versions 0.0.0 to 0.0.3 make the same objects for the same
+  resources. Version 0.0.3 reads an index that a previous version made, and it
+  calculates the same scores. A previous version also reads an index that
+  0.0.3 made.
+- **Version 0.0.3 changes the output of `map find`.** Segments that are
+  adjacent are one hit, and one file has a maximum of two hits. See
+  [Search the index](#search-the-index).
 - **`map index` changes one line.** It writes the version of the binary into
   the provenance line of `manifest.json`. `map find -u` writes that line only
   when it does an index build. It does no index build when the index is not
@@ -350,17 +360,54 @@ only. `-d` gives a dimension and its text, with an optional weight:
 ```console
 $ map find "refresh_token"                                  # short form for lexical
 $ map find -d 'lexical=gitignore glob' -d 'declaration=Gitignore' -n 4
-crates/ignore/src/gitignore.rs:65  0.732  [declaration 0.59, lexical 0.88]
-crates/ignore/src/gitignore.rs:289  0.713  [declaration 0.69, lexical 0.74]
-crates/ignore/src/gitignore.rs:321  0.686  [declaration 0.53, lexical 0.84]
-crates/ignore/src/dir.rs:33  0.591  [declaration 0.33, lexical 0.85]
+crates/ignore/src/gitignore.rs:65  0.732  [declaration 0.59, lexical 0.88]  (lines 1-104; also 449)
+crates/ignore/src/gitignore.rs:289  0.713  [declaration 0.69, lexical 0.74]  (lines 289-392)
+crates/ignore/src/dir.rs:33  0.591  [declaration 0.33, lexical 0.85]  (also 1281, 993, 1441)
+crates/ignore/src/dir.rs:1185  0.545  [declaration 0.65, lexical 0.44]  (lines 1153-1224)
 
 $ map find -d 'lexical:0.3=parse' -d 'descriptive:1.0=validates user input'
 ```
 
 Each hit is one line: `path:line  score`. The line number is the first line of
-the segment that matched. `--snippet` prints the first 12 lines of that
-segment.
+the segment that matched.
+
+`--snippet` prints the first 12 lines of that segment, with their line
+numbers. `--snippet=5` prints 5 lines. Write the number with `=`. The output
+lets you select a hit. It is not the full hit:
+
+```console
+$ map find -d 'declaration=add_line' -d 'lexical=add_line GitignoreBuilder' -n 1 --snippet
+crates/ignore/src/gitignore.rs:449  0.622  [declaration 0.62, lexical 0.62]  (lines 385-488; also 97, 321, 513, +1)
+    [TRUNCATED: lines 385-448 are before this snippet]
+    449          Ok(self)
+    450      }
+    451  
+    452      /// Add a line from a gitignore file to this builder.
+    453      ///
+    454      /// If this line came from a particular `gitignore` file, then its path
+    455      /// should be provided here.
+    456      ///
+    457      /// If the line could not be parsed as a glob, then an error is returned.
+    458      pub fn add_line(
+    459          &mut self,
+    460          from: Option<PathBuf>,
+    [TRUNCATED: lines 461-488 are after this snippet. The match can be in the cut lines: read lines 385-488 before you search again.]
+```
+
+A `[TRUNCATED ...]` notice shows that the hit has lines that `--snippet` does
+not print. A notice can be before the first line, after the last line, or in
+the two positions. A hit that has more than one segment has lines before its
+best segment. The last notice gives the lines of the full hit. If the
+`--snippet` output does not show the match, read those lines before you search
+again.
+
+A hit can end with a note in parentheses:
+
+- `lines A-B`: segments that are adjacent are one hit. The note gives the full
+  range, and the line number of the hit is the best segment in that range.
+- `also N, N`: one file has a maximum of two hits. The first hit of the file
+  gives the lines of the other matches in that file. `+K` is the number of
+  matches that the note does not show. Use `--per-file 0` to remove the limit.
 
 The dimensions are parameters of one query. They are not different tools. When
 more than one dimension gives a score, MAP also prints the score of each
@@ -383,7 +430,8 @@ answer.
 | `-n, --limit N` | Maximum number of hits (default 10) |
 | `--level LEVELS` | Levels to search (default: all) |
 | `--members` | For a cluster hit, show the spans below it |
-| `--snippet` | Print the first 12 lines of each segment hit |
+| `--per-file N` | Maximum number of hits from one file (default 2; `0` removes the limit) |
+| `--snippet[=N]` | Print the first N lines of each segment hit (default 12), with their line numbers. A `[TRUNCATED ...]` notice shows the lines of the hit that the command does not print. |
 | `-u, --update` | Update the index before the search |
 | `--degraded abort\|allow` | The action when `-u` finds a stage that it cannot run |
 | `--root PATH` | Search one more index. You can use this flag more than one time. |
@@ -456,9 +504,9 @@ path = "C:/src/other-service"
 the index before the search:
 
 ```console
-$ map find "the_new_symbol" -u
-map: updated 2 object(s) before searching
-crates/globset/src/glob.rs:1665  0.526
+$ map find "the_new_symbol" -u -n 1
+map: updated 3 object(s) before searching
+crates/globset/src/glob.rs:1665  0.527
 ```
 
 Without `-u`, MAP prints a notice on stderr when the index is stale:
@@ -1043,7 +1091,7 @@ To do this check, each process hashes all packs of the index. On ripgrep, the
 check is approximately 4 ms for the two default packs (2.4 MB) and
 approximately 17 ms for all four packs (13.0 MB).
 
-The binary is **4.27 MB** by default and **10.14 MB** with all features. See
+The binary is **4.33 MB** by default and **10.20 MB** with all features. See
 [Install](#install) for the size of each feature.
 
 ## Development

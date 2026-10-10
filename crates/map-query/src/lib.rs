@@ -836,6 +836,21 @@ impl Index {
         Ok((text[start..end].to_owned(), line_of(&text, hit.start)))
     }
 
+    /// One-based line numbers of byte offsets in a hit's resource, in the order
+    /// given. Reads the resource one time, however many offsets there are.
+    pub fn lines_of(&self, hit: &Hit, offsets: &[u32]) -> Result<Vec<usize>, QueryError> {
+        map_stages::discover::check_resource_key(&hit.resource)
+            .map_err(|_| QueryError::UnsafeResourceKey(hit.resource.clone()))?;
+
+        let path = self.root.join(&hit.resource);
+        let raw = std::fs::read_to_string(&path).map_err(|e| QueryError::Io { path, source: e })?;
+        let text = map_stages::preprocess::normalize_line_endings(&raw);
+        Ok(offsets
+            .iter()
+            .map(|offset| line_of(&text, *offset))
+            .collect())
+    }
+
     /// The label of a cluster hit, read from its stored record.
     ///
     /// A cluster spans no file, so its `resource` is its own object key.
@@ -1226,6 +1241,14 @@ impl Federation {
             .snippet(hit)
     }
 
+    /// Line numbers of byte offsets in a hit's resource, resolved against the
+    /// right root. See [`Index::lines_of`].
+    pub fn lines_of(&self, hit: &Hit, offsets: &[u32]) -> Result<Vec<usize>, QueryError> {
+        self.index_of(hit)
+            .ok_or_else(|| QueryError::UnknownOrigin(hit.origin.clone()))?
+            .lines_of(hit, offsets)
+    }
+
     /// The label of a cluster hit, resolved against the right root.
     pub fn cluster_label(&self, hit: &Hit) -> Option<String> {
         self.index_of(hit)?.cluster_label(hit)
@@ -1248,6 +1271,169 @@ pub fn line_of(text: &str, offset: u32) -> usize {
         + 1
 }
 
+/// One entry of a result list shaped for a reader.
+///
+/// A ranked list of segments repeats itself. The neighbouring segments of one
+/// long function each take a place, and one file that says the query words
+/// often fills the list while the file that defines the thing never appears.
+/// A region is a run of overlapping or touching segment hits in one resource,
+/// shown once, and a resource holds only so many places.
+#[derive(Clone, Debug)]
+pub struct Region {
+    /// The best-scoring hit of the run: where a reader should start, and the
+    /// score that ranks the region.
+    pub best: Hit,
+    /// Extent of the whole run, as byte offsets into normalized content.
+    pub start: u32,
+    pub end: u32,
+    /// How many segment hits the run holds.
+    pub segments: usize,
+    /// Starts of the best hits of further regions in the same resource that
+    /// the per-resource limit kept out of the list, best first. Naming them
+    /// is what lets the limit hide nothing.
+    pub more: Vec<u32>,
+}
+
+/// Ranked hits read for each place in the list on the first pass, and the
+/// least read.
+const DEPTH_PER_PLACE: usize = 4;
+const DEPTH_MIN: usize = 20;
+
+/// Shape ranked hits into at most `limit` regions.
+///
+/// `ranked` is the whole ranked list, best first — what `find_at` returns for
+/// a limit of `usize::MAX`. Only a prefix of it is read, because the depth is
+/// what decides which segments count as hits: at full depth every weak match
+/// joins its neighbours, and one file becomes one region.
+///
+/// A fixed depth has the opposite fault. A long run of neighbours takes most
+/// of its places and gives one region, so the list comes back short while
+/// candidates wait just below the cut. So the depth doubles while the list is
+/// short and hits remain. The fullest list wins, and the shallowest of equals,
+/// because reading deeper can also join two regions into one.
+///
+/// `per_resource` is the most regions one resource may hold; 0 means no limit.
+/// Regions that do not touch stay separate — a long file holds unrelated
+/// places, and one entry for the whole file would point at none of them.
+///
+/// A cluster hit spans no resource and is always its own region.
+pub fn regions(ranked: &[Hit], per_resource: usize, limit: usize) -> Vec<Region> {
+    let mut depth = limit.saturating_mul(DEPTH_PER_PLACE).max(DEPTH_MIN);
+    let mut fullest: Vec<Region> = Vec::new();
+    loop {
+        let shaped = shape(&ranked[..depth.min(ranked.len())], per_resource, limit);
+        if shaped.len() > fullest.len() {
+            fullest = shaped;
+        }
+        if fullest.len() >= limit || depth >= ranked.len() {
+            return fullest;
+        }
+        depth = depth.saturating_mul(2);
+    }
+}
+
+/// A region whose best hit is still borrowed, so that a pass over a deep
+/// prefix clones only the hits that reach the list.
+struct Run<'a> {
+    best: &'a Hit,
+    start: u32,
+    end: u32,
+    segments: usize,
+    more: Vec<u32>,
+}
+
+impl<'a> Run<'a> {
+    fn of(hit: &'a Hit) -> Self {
+        Run {
+            best: hit,
+            start: hit.start,
+            end: hit.end,
+            segments: 1,
+            more: Vec::new(),
+        }
+    }
+}
+
+/// One pass of [`regions`] over the hits it has read so far.
+fn shape(read: &[Hit], per_resource: usize, limit: usize) -> Vec<Region> {
+    let mut runs: Vec<Run<'_>> = Vec::new();
+    let mut by_resource: BTreeMap<(&str, &str), Vec<&Hit>> = BTreeMap::new();
+    for hit in read {
+        if hit.level > 0 {
+            runs.push(Run::of(hit));
+        } else {
+            by_resource
+                .entry((hit.origin.as_str(), hit.resource.as_str()))
+                .or_default()
+                .push(hit);
+        }
+    }
+    for (_, mut segments) in by_resource {
+        segments.sort_by_key(|hit| hit.start);
+        let mut current: Option<Run<'_>> = None;
+        for hit in segments {
+            match &mut current {
+                // Touching counts as one run: a segmenter with no overlap
+                // still cuts one text into neighbours.
+                Some(run) if hit.start <= run.end => {
+                    run.end = run.end.max(hit.end);
+                    run.segments += 1;
+                    if hit.score > run.best.score {
+                        run.best = hit;
+                    }
+                }
+                _ => {
+                    runs.extend(current.take());
+                    current = Some(Run::of(hit));
+                }
+            }
+        }
+        runs.extend(current);
+    }
+    // The same tie-break as `rank`, so repeated queries agree.
+    runs.sort_by(|a, b| {
+        b.best
+            .score
+            .total_cmp(&a.best.score)
+            .then(a.best.origin.cmp(&b.best.origin))
+            .then(a.best.resource.cmp(&b.best.resource))
+            .then(a.start.cmp(&b.start))
+    });
+
+    let mut kept: Vec<Run<'_>> = Vec::new();
+    // For each resource: where its first region is in `kept`, and how many it has.
+    let mut held: BTreeMap<(&str, &str), (usize, usize)> = BTreeMap::new();
+    for run in runs {
+        let best = run.best;
+        if best.level > 0 || per_resource == 0 {
+            kept.push(run);
+            continue;
+        }
+        let key = (best.origin.as_str(), best.resource.as_str());
+        match held.get_mut(&key) {
+            None => {
+                held.insert(key, (kept.len(), 1));
+                kept.push(run);
+            }
+            Some((_, count)) if *count < per_resource => {
+                *count += 1;
+                kept.push(run);
+            }
+            Some((first, _)) => kept[*first].more.push(best.start),
+        }
+    }
+    kept.truncate(limit);
+    kept.into_iter()
+        .map(|run| Region {
+            best: run.best.clone(),
+            start: run.start,
+            end: run.end,
+            segments: run.segments,
+            more: run.more,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1255,6 +1441,123 @@ mod tests {
     use map_format::{Record, RecordKind, RecordMeta, Tensor};
     use map_stages::lexical::{encode_frequencies, tokenize};
     use map_stages::PackBuilder;
+
+    fn segment_hit(resource: &str, start: u32, score: f32) -> Hit {
+        Hit {
+            origin: Origin::new(),
+            resource: resource.to_owned(),
+            start,
+            end: start + 100,
+            level: 0,
+            score,
+            per_dimension: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn neighbouring_segments_of_one_resource_are_one_entry() {
+        // Three overlapping segments of one long function, and one segment far
+        // away in the same file. The reader gets two places, not four.
+        let hits = vec![
+            segment_hit("a.rs", 180, 0.9),
+            segment_hit("a.rs", 100, 0.5),
+            segment_hit("a.rs", 260, 0.4),
+            segment_hit("a.rs", 5000, 0.3),
+        ];
+        let out = regions(&hits, 0, 10);
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].start, out[0].end, out[0].segments), (100, 360, 3));
+        assert_eq!(
+            out[0].best.start, 180,
+            "the entry points at its best segment"
+        );
+        assert_eq!(
+            (out[1].start, out[1].segments),
+            (5000, 1),
+            "a far match stays its own entry"
+        );
+    }
+
+    #[test]
+    fn one_resource_cannot_fill_the_list_and_its_other_matches_are_named() {
+        // A test file that repeats the query words in five places would fill a
+        // list of four, and the file that defines the thing would not appear.
+        let mut hits: Vec<Hit> = (0..5)
+            .map(|i| segment_hit("tests.rs", i * 1000, 0.9 - i as f32 * 0.05))
+            .collect();
+        hits.push(segment_hit("server.rs", 0, 0.3));
+        hits.push(segment_hit("doc.md", 0, 0.2));
+        let out = regions(&hits, 2, 4);
+        let shown: Vec<&str> = out.iter().map(|r| r.best.resource.as_str()).collect();
+        assert_eq!(shown, ["tests.rs", "tests.rs", "server.rs", "doc.md"]);
+        assert_eq!(
+            out[0].more,
+            [2000, 3000, 4000],
+            "left out, but named, best first"
+        );
+        assert!(out[1].more.is_empty());
+    }
+
+    #[test]
+    fn no_limit_keeps_every_region_and_a_cluster_is_never_merged() {
+        let mut cluster = segment_hit("0123abcd", 0, 0.8);
+        cluster.level = 1;
+        let hits = vec![
+            cluster.clone(),
+            cluster,
+            segment_hit("a.rs", 0, 0.7),
+            segment_hit("a.rs", 1000, 0.6),
+            segment_hit("a.rs", 2000, 0.5),
+        ];
+        let out = regions(&hits, 0, 10);
+        assert_eq!(out.len(), 5);
+        assert!(out.iter().all(|r| r.more.is_empty() && r.segments == 1));
+    }
+
+    #[test]
+    fn a_long_run_of_neighbours_does_not_leave_the_list_short() {
+        // Thirty neighbouring segments of one file outrank everything else. A
+        // first pass reads twenty hits, all of them that one run, so the four
+        // other files are below the cut.
+        let mut ranked: Vec<Hit> = (0..30)
+            .map(|i| segment_hit("long.rs", i * 80, 0.9 - i as f32 * 0.01))
+            .collect();
+        for (i, name) in ["b.rs", "c.rs", "d.rs", "e.rs"].iter().enumerate() {
+            ranked.push(segment_hit(name, 0, 0.3 - i as f32 * 0.01));
+        }
+        let out = regions(&ranked, 2, 5);
+        let shown: Vec<&str> = out.iter().map(|r| r.best.resource.as_str()).collect();
+        assert_eq!(shown, ["long.rs", "b.rs", "c.rs", "d.rs", "e.rs"]);
+        assert_eq!(out[0].segments, 30);
+    }
+
+    #[test]
+    fn reading_deeper_never_makes_the_list_shorter() {
+        // Two files, each with two strong matches far apart, then a tail of
+        // weak matches that fills the gap between them. The list cannot reach
+        // ten entries, so every hit gets read, and at that depth each file is
+        // one run. The four places found first are the answer.
+        let mut ranked = vec![
+            segment_hit("a.rs", 0, 0.9),
+            segment_hit("b.rs", 0, 0.8),
+            segment_hit("a.rs", 2400, 0.7),
+            segment_hit("b.rs", 2400, 0.6),
+        ];
+        for i in 1..30 {
+            ranked.push(segment_hit("a.rs", i * 80, 0.2 - i as f32 * 0.001));
+            ranked.push(segment_hit("b.rs", i * 80, 0.1 - i as f32 * 0.001));
+        }
+        assert_eq!(shape(&ranked, 2, 10).len(), 2, "full depth joins each file");
+        let out = regions(&ranked, 2, 10);
+        let starts: Vec<(&str, u32)> = out
+            .iter()
+            .map(|r| (r.best.resource.as_str(), r.best.start))
+            .collect();
+        assert_eq!(
+            starts,
+            [("a.rs", 0), ("b.rs", 0), ("a.rs", 2400), ("b.rs", 2400)]
+        );
+    }
 
     struct TempMap(PathBuf);
     impl TempMap {

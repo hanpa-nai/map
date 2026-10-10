@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 # Set by `ignore`, the highest floor in the tree, and verified by the `msrv`
 # job in CI rather than asserted here.

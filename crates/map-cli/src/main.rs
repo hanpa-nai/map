@@ -251,9 +251,29 @@ struct FindArgs {
     #[arg(short = 'n', long, default_value_t = 10)]
     limit: usize,
 
-    /// Print the first 12 lines of each segment hit, after its location.
-    #[arg(long)]
-    snippet: bool,
+    /// The maximum number of hits from one file.
+    ///
+    /// Segments that are adjacent become one hit. The first hit of a file
+    /// shows the lines of the other matches in that file. `0` removes the
+    /// limit.
+    #[arg(long, default_value_t = 2, value_name = "N")]
+    per_file: usize,
+
+    /// Print the first lines of each segment hit, with their line numbers.
+    ///
+    /// `--snippet` prints 12 lines, and `--snippet=5` prints 5 lines. If the
+    /// hit has more lines, a `[TRUNCATED ...]` line shows the lines that the
+    /// command does not print. The last one gives the lines of the full hit.
+    // `require_equals`: without it, `--snippet "the query"` reads the query
+    // as the number of lines.
+    #[arg(
+        long,
+        value_name = "LINES",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "12"
+    )]
+    snippet: Option<usize>,
 
     /// For a cluster hit, show the spans below it.
     ///
@@ -1096,6 +1116,86 @@ fn terminal_safe(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
+/// Further matches of a file named by line on its first entry; the rest are counted.
+const MORE_SHOWN: usize = 3;
+
+/// What else an entry stands for: the extent of a run of merged segments, and
+/// the lines of further matches in the same file that `--per-file` left out.
+///
+/// `lines` is the entry's own line, the first and last line of the run, then
+/// one line for each named further match.
+fn spread_note(segments: usize, more: usize, lines: &[usize]) -> Option<String> {
+    let mut parts = Vec::new();
+    if segments > 1 {
+        if let (Some(first), Some(last)) = (lines.get(1), lines.get(2)) {
+            parts.push(format!("lines {first}-{last}"));
+        }
+    }
+    if more > 0 {
+        let mut also: Vec<String> = lines.iter().skip(3).map(usize::to_string).collect();
+        let counted = more.saturating_sub(also.len());
+        if counted > 0 {
+            also.push(format!("+{counted}"));
+        }
+        parts.push(format!("also {}", also.join(", ")));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// What `--snippet` prints for a hit: at most `limit` lines from the start of
+/// its best segment, and a notice for each part of the hit that is cut.
+///
+/// `text` is the best segment, and its first line is `first_line`. `extent` is
+/// the first and the last line of the hit. A hit is longer than its best
+/// segment when the neighbours of that segment were merged into it, so lines
+/// of the hit can be cut before the snippet as well as after it.
+///
+/// The snippet is only enough of a hit to choose between hits, so each cut is
+/// said out loud. A cut that is not marked reads as the whole hit. The last
+/// notice also tells the reader what to do: a reader that does not find the
+/// match in the snippet otherwise searches again, for lines that this hit
+/// already holds.
+fn snippet_lines(
+    text: &str,
+    first_line: usize,
+    limit: usize,
+    extent: (usize, usize),
+) -> Vec<String> {
+    let (hit_first, hit_last) = extent;
+    let shown = text.lines().count().min(limit);
+    let next = first_line + shown;
+    let (cut_before, cut_after) = (hit_first < first_line, next <= hit_last);
+    let advice = format!(
+        "The match can be in the cut lines: read lines {hit_first}-{hit_last} before you search again."
+    );
+
+    let width = (first_line + shown.saturating_sub(1)).to_string().len();
+    let mut out = Vec::new();
+    if cut_before {
+        let before = format!(
+            "lines {hit_first}-{} are before this snippet",
+            first_line - 1
+        );
+        out.push(if cut_after {
+            format!("    [TRUNCATED: {before}]")
+        } else {
+            format!("    [TRUNCATED: {before}. {advice}]")
+        });
+    }
+    out.extend(
+        text.lines()
+            .take(shown)
+            .enumerate()
+            .map(|(offset, line)| format!("    {:>width$}  {line}", first_line + offset)),
+    );
+    if cut_after {
+        out.push(format!(
+            "    [TRUNCATED: lines {next}-{hit_last} are after this snippet. {advice}]"
+        ));
+    }
+    out
+}
+
 fn find(mut args: FindArgs) -> Result<ExitCode, String> {
     let mut query = map_query::Query::new();
 
@@ -1154,8 +1254,11 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
     let roots = federated_roots(&args);
     let federated = roots.len() > 1;
     let index = map_query::Federation::open(roots).map_err(|e| e.to_string())?;
+    // Every ranked hit, not the first `--limit`: merging neighbours and
+    // limiting one file both free places, and `regions` reads as deep as it
+    // must to fill them.
     let hits = index
-        .find_at(&query, args.limit, levels)
+        .find_at(&query, usize::MAX, levels)
         .map_err(|e| e.to_string())?;
 
     if hits.is_empty() {
@@ -1169,7 +1272,11 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    for hit in &hits {
+    let regions = map_query::regions(&hits, args.per_file, args.limit);
+    for region in &regions {
+        let hit = &region.best;
+        let mut spread = None;
+        let mut extent = None;
         if hit.level > 0 {
             // A cluster spans no file — show the fabricator's label, not a
             // line. This is the zoomed-out overview the level filter selects.
@@ -1181,7 +1288,13 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
                 terminal_safe(&label)
             );
         } else {
-            let line = index.snippet(hit).map(|(_, line)| line).unwrap_or(1);
+            // One read of the file gives every line number this entry shows.
+            let mut offsets = vec![hit.start, region.start, region.end.saturating_sub(1)];
+            offsets.extend(region.more.iter().take(MORE_SHOWN));
+            let lines = index.lines_of(hit, &offsets).unwrap_or_default();
+            let line = lines.first().copied().unwrap_or(1);
+            spread = spread_note(region.segments, region.more.len(), &lines);
+            extent = lines.get(1).copied().zip(lines.get(2).copied());
             // Prefix the origin only when there is more than one, so a
             // single-index query's output is unchanged and stays greppable.
             let where_ = if federated {
@@ -1205,6 +1318,9 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
                 .collect();
             print!("  [{}]", breakdown.join(", "));
         }
+        if let Some(note) = spread {
+            print!("  ({note})");
+        }
         println!();
 
         if args.members && hit.level > 0 {
@@ -1227,10 +1343,16 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
             println!();
         }
 
-        if args.snippet && hit.level == 0 {
-            if let Ok((text, _)) = index.snippet(hit) {
-                for line in text.lines().take(12) {
-                    println!("    {line}");
+        if let (Some(limit), 0) = (args.snippet, hit.level) {
+            if let Ok((text, first_line)) = index.snippet(hit) {
+                // Without the lines of the hit, its best segment is all that
+                // is known of it.
+                let segment = (
+                    first_line,
+                    first_line + text.lines().count().saturating_sub(1),
+                );
+                for line in snippet_lines(&text, first_line, limit, extent.unwrap_or(segment)) {
+                    println!("{line}");
                 }
                 println!();
             }
@@ -1336,7 +1458,7 @@ fn report_staleness(args: &FindArgs) {
 mod tests {
     use super::{
         display_path, driver_program, merge_manifests, newer_index_hint, parse_dim, parse_levels,
-        repository_at_or_above, should_register,
+        repository_at_or_above, should_register, snippet_lines, spread_note,
     };
     use map_format::{Manifest, ObjectEntry, ObjectKey, Tier};
     use map_query::LevelFilter;
@@ -1434,6 +1556,120 @@ mod tests {
     fn the_minimal_test_config_is_valid_at_the_supported_version() {
         // Otherwise the two hint tests could pass on an unrelated parse error.
         map_format::Config::parse(&minimal_config(1)).unwrap();
+    }
+
+    #[test]
+    fn an_entry_says_what_else_it_stands_for() {
+        // One segment and no other match in the file: the line says it all.
+        assert_eq!(spread_note(1, 0, &[10, 10, 49]), None);
+        // A run of merged segments gives its extent.
+        assert_eq!(
+            spread_note(3, 0, &[833, 801, 936]).as_deref(),
+            Some("lines 801-936")
+        );
+        // Matches that `--per-file` left out are named, and the rest counted,
+        // so that the limit hides nothing.
+        assert_eq!(
+            spread_note(1, 5, &[833, 833, 872, 161, 65, 737]).as_deref(),
+            Some("also 161, 65, 737, +2")
+        );
+        assert_eq!(
+            spread_note(2, 1, &[5, 1, 72, 400]).as_deref(),
+            Some("lines 1-72; also 400")
+        );
+    }
+
+    #[test]
+    fn a_cut_snippet_says_so_and_tells_the_reader_to_read_the_cut_lines() {
+        // A segment of 25 lines that starts at line 321. The reader gets 12 of
+        // them, and must be told that 13 more are there.
+        let text: String = (0..25).map(|i| format!("line {i}\n")).collect();
+        let shown = snippet_lines(&text, 321, 12, (321, 345));
+
+        assert_eq!(shown.len(), 13, "12 lines and the notice");
+        assert_eq!(shown[0], "    321  line 0");
+        assert_eq!(shown[11], "    332  line 11");
+        assert_eq!(
+            shown[12],
+            "    [TRUNCATED: lines 333-345 are after this snippet. The match can be in the cut lines: \
+             read lines 321-345 before you search again.]"
+        );
+    }
+
+    #[test]
+    fn a_merged_hit_says_what_is_cut_before_its_snippet_and_after_it() {
+        // Three segments are one hit, lines 385 to 488, and the best of them
+        // starts at line 449. Lines of the hit are cut on the two sides.
+        let text: String = (0..40).map(|i| format!("line {i}\n")).collect();
+        let shown = snippet_lines(&text, 449, 12, (385, 488));
+
+        assert_eq!(shown.len(), 14, "a notice, 12 lines, and a notice");
+        assert_eq!(
+            shown[0],
+            "    [TRUNCATED: lines 385-448 are before this snippet]"
+        );
+        assert_eq!(shown[1], "    449  line 0");
+        assert_eq!(shown[12], "    460  line 11");
+        assert_eq!(
+            shown[13],
+            "    [TRUNCATED: lines 461-488 are after this snippet. The match can be in the cut lines: \
+             read lines 385-488 before you search again.]"
+        );
+
+        // The best segment is the last one and all of it is shown. The one
+        // notice is then before the snippet, and it carries the advice.
+        let last = snippet_lines(&text, 449, 40, (385, 488));
+        assert_eq!(last.len(), 41);
+        assert_eq!(
+            last[0],
+            "    [TRUNCATED: lines 385-448 are before this snippet. The match can be in the cut lines: \
+             read lines 385-488 before you search again.]"
+        );
+        assert!(!last[40].contains("TRUNCATED"));
+    }
+
+    #[test]
+    fn a_hit_that_fits_in_the_snippet_has_no_truncation_notice() {
+        // A notice on a whole hit would send the reader to lines that it
+        // already has.
+        let text: String = (0..12).map(|i| format!("line {i}\n")).collect();
+        let shown = snippet_lines(&text, 97, 12, (97, 108));
+
+        assert_eq!(shown.len(), 12);
+        assert_eq!(shown[0], "     97  line 0");
+        assert_eq!(shown[11], "    108  line 11");
+        assert!(!shown.iter().any(|line| line.contains("TRUNCATED")));
+        assert!(snippet_lines("", 1, 12, (1, 0)).is_empty());
+    }
+
+    #[test]
+    fn the_number_after_the_snippet_flag_sets_the_lines_of_each_hit() {
+        let text: String = (0..25).map(|i| format!("line {i}\n")).collect();
+        let shown = snippet_lines(&text, 321, 5, (321, 345));
+
+        assert_eq!(shown.len(), 6, "5 lines and the notice");
+        assert_eq!(shown[4], "    325  line 4");
+        assert!(shown[5].starts_with("    [TRUNCATED: lines 326-345 are after this snippet."));
+        // A number as large as the segment gives all of it, with no notice.
+        assert_eq!(snippet_lines(&text, 321, 40, (321, 345)).len(), 25);
+    }
+
+    #[test]
+    fn a_snippet_flag_with_no_number_gives_12_lines_and_does_not_take_the_query() {
+        use clap::Parser;
+        let find = |args: &[&str]| match super::Cli::try_parse_from(args) {
+            Ok(super::Cli {
+                command: super::Command::Find(find),
+            }) => find,
+            _ => panic!("{args:?} is not a `find` command"),
+        };
+
+        let bare = find(&["map", "find", "--snippet", "the query"]);
+        assert_eq!(bare.snippet, Some(12));
+        assert_eq!(bare.lexical.as_deref(), Some("the query"));
+
+        assert_eq!(find(&["map", "find", "--snippet=5", "q"]).snippet, Some(5));
+        assert_eq!(find(&["map", "find", "q"]).snippet, None);
     }
 
     #[test]
