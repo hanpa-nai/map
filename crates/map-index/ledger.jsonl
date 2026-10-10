@@ -1,6 +1,7 @@
 {"stage":"bm25-pack","fixture":"v1","identity":"bm25:k1=1.2,b=0.75","digest":"55664351788bf408967f9075a11d4fdcdfb6f5c195688ae0f9e46ed7e5e8aab9"}
 {"stage":"content","fixture":"v1","identity":"content:v1","digest":"a9cfa9792d8781e52dd652b7b762c2ae3a67b9d00f77a57be845f5591b71a4d4"}
 {"stage":"declaration","fixture":"v1","identity":"declaration:v1","digest":"0fd04e2475d5301a3d8d4700f17b45ed1170ad96e476e8b74fd516bd05d5bd8f"}
+{"stage":"declaration","fixture":"v1","identity":"declaration:v2","digest":"6827c6fd48b48443c3fa5e04ba5ff37f2e65647d903c2a560ec284b5b21b233b"}
 {"stage":"descriptor-object","fixture":"v1","identity":"structural:v1|lexical|segmenter=c180cd0323b5c907bd9f1656f6d80967aae551f6c0c05f2c6da7b1f9b7403d70","digest":"f1156817fb7052fe81c8ed36fc9d6e2eef23f93ab7f210baf56fa4bef784b2ce"}
 {"stage":"discover","fixture":"v1","identity":"fs:max_bytes=4194304","digest":"d564e1164064a7de1f0afabe560ffb28dc5a129d8abe178aaeb6b741581887df"}
 {"stage":"llm-request-parts","fixture":"v1","identity":"chat-completions:model=ledger-model:prompt=Describe what this does.:dims=descriptive:facets=description,identifiers[8]:framing=You are given {count} numbered segments. Return a JSON object with a `segments` array holding exactly {count} objects, one per segment in order. Each object has these {kind}, one per facet: {facets}.{shape}","digest":"0eeda6225c658d651c747e92d4414e490b66904b01ad44acfb32c31ca405602b"}

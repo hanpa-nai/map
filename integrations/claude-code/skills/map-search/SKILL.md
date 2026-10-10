@@ -56,7 +56,7 @@ An index has only the dimensions that `map brief` shows. If a description in
 Rules:
 
 - **Use two dimensions or more when you can.** On the ripgrep test set,
-  `lexical` + `declaration` gets 0.621 file nDCG@10, and `lexical` only gets
+  `lexical` + `declaration` gets 0.615 file nDCG@10, and `lexical` only gets
   0.535.
 - **To find a declaration**, put the name in `declaration` and the context
   words in `lexical`.
@@ -70,7 +70,7 @@ Rules:
 ## 3. Read the result
 
 ```
-crates/searcher/src/searcher/mod.rs:33  0.793  [declaration 0.67, lexical 0.92]  (also 769, 833)
+crates/searcher/src/searcher/mod.rs:33  0.786  [declaration 0.65, lexical 0.92]  (also 769, 833)
 ```
 
 - `path:line` is the location. The line is the first line of a segment. A

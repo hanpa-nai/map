@@ -370,6 +370,40 @@ fn a_declared_name_outranks_its_callers_in_the_declaration_dimension() {
 }
 
 #[test]
+fn an_exact_declared_name_outranks_longer_names_that_contain_it() {
+    let corpus = Corpus::new("declaration-exact");
+    // Three declarations whose names end in the word, in one file. The one
+    // declaration of the word itself is in a different file, beside a test
+    // with a long name. Counted part by part, that segment holds the word one
+    // time among many terms, and the other segment holds it three times.
+    fs::write(
+        corpus.path().join("src/parts.rs"),
+        "fn config_fingerprint() {}\nfn artifact_fingerprint() {}\nfn fab_fingerprint() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        corpus.path().join("src/exact.rs"),
+        "pub fn fingerprint() -> u64 {\n    0\n}\n\n\
+         fn a_storage_setting_the_writer_ignores_is_refused() {}\n",
+    )
+    .unwrap();
+    map_index::run(corpus.path()).unwrap();
+    let index = map_query::Index::open(corpus.path()).unwrap();
+
+    let declared = map_query::Query::from([(
+        "declaration".to_owned(),
+        map_query::QueryTerm::new("fingerprint"),
+    )]);
+    let hits = index.find(&declared, 5).unwrap();
+    let resources: Vec<&str> = hits.iter().map(|h| h.resource.as_str()).collect();
+    assert_eq!(resources.first(), Some(&"src/exact.rs"), "{resources:?}");
+    assert!(
+        resources.contains(&"src/parts.rs"),
+        "a part of a name still finds the name: {resources:?}"
+    );
+}
+
+#[test]
 fn camel_case_and_snake_case_reach_the_same_code() {
     let corpus = Corpus::new("tokenize");
     map_index::run(corpus.path()).unwrap();

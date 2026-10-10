@@ -26,8 +26,8 @@ distilled = ["dep:tokenizers", "dep:safetensors", "dep:serde", "dep:serde_json"]
 auto-distilled = ["distilled", "dep:ureq", "dep:sha2", "dep:thiserror"]
 
 [dependencies]
-map-core = { version = "0.0.3", path = "../map-core" }
-map-format = { version = "0.0.3", path = "../map-format" }
+map-core = { version = "0.0.4", path = "../map-core" }
+map-format = { version = "0.0.4", path = "../map-format" }
 
 # fancy-regex is the pure-Rust regex backend; the alternative (onig) is native
 # C and ruled out by MAP's no-native-libs decision. The BGE tokenizer is

@@ -28,11 +28,11 @@ auto-distilled = ["distilled", "map-embed/auto-distilled"]
 llm = ["map-stages/llm", "dep:map-llm"]
 
 [dependencies]
-map-core = { version = "0.0.3", path = "../map-core" }
-map-format = { version = "0.0.3", path = "../map-format" }
-map-stages = { version = "0.0.3", path = "../map-stages" }
-map-embed = { version = "0.0.3", path = "../map-embed", optional = true }
-map-llm = { version = "0.0.3", path = "../map-llm", optional = true }
+map-core = { version = "0.0.4", path = "../map-core" }
+map-format = { version = "0.0.4", path = "../map-format" }
+map-stages = { version = "0.0.4", path = "../map-stages" }
+map-embed = { version = "0.0.4", path = "../map-embed", optional = true }
+map-llm = { version = "0.0.4", path = "../map-llm", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.19"

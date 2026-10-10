@@ -14,7 +14,7 @@ type of a resource. Discovery reads a directory tree, and the segmenter cuts
 line windows. The prompts and the dimension descriptions of a corpus tell a
 model the type of its material.
 
-> **Status: alpha (`v0.0.3`).** The format on disk is a draft and can change.
+> **Status: alpha (`v0.0.4`).** The format on disk is a draft and can change.
 > See [`spec/format-v1.md`](spec/format-v1.md). MAP is not on crates.io. Build
 > it from source.
 
@@ -57,7 +57,7 @@ necessary. Measured on ripgrep (229 files):
 
 | | |
 |---|---|
-| Committed index | 622 files, 2.3 MB |
+| Committed index | 622 files, 2.4 MB |
 | Index build | 2.1 s (3.7 s for the first build after a clone) |
 | One search, from process start to exit | 20 ms |
 
@@ -78,7 +78,7 @@ and the model writes text in it. One call can use one dimension or more.
 | **Accurate results** | MAP calculates the score of each dimension with the method for that dimension. Then it fuses the scores. |
 | **One index for all users** | You commit the index. One person builds it, and all users read it. |
 
-On ripgrep, a query on `lexical` + `declaration` gets a score of **0.621** file
+On ripgrep, a query on `lexical` + `declaration` gets a score of **0.615** file
 nDCG@10. A query on `lexical` only gets 0.535, and grep gets **0.453**. The
 default index has the two dimensions. The full table is in
 [Retrieval quality](#retrieval-quality).
@@ -127,10 +127,10 @@ Release binary size on Windows, measured (1 MB = 1,000,000 bytes):
 
 | binary | size |
 |---|---|
-| default (`lexical` + `declaration`) | **4.33 MB** |
+| default (`lexical` + `declaration`) | **4.34 MB** |
 | `distilled` | 7.37 MB |
-| `auto-distilled` | 9.94 MB |
-| all features | **10.20 MB** |
+| `auto-distilled` | 9.95 MB |
+| all features | **10.21 MB** |
 
 `auto-distilled` adds 2.57 MB to `distilled`. The TLS stack is the cause.
 
@@ -188,13 +188,17 @@ in a new directory.
 
 ### After an upgrade
 
-- **No index build is necessary after an upgrade from a previous version to
-  0.0.3.** Versions 0.0.0 to 0.0.3 make the same objects for the same
-  resources. Version 0.0.3 reads an index that a previous version made, and it
-  calculates the same scores. A previous version also reads an index that
-  0.0.3 made.
-- **Version 0.0.3 changes the output of `map find`.** Segments that are
-  adjacent are one hit, and one file has a maximum of two hits. See
+- **Run `map index` one time after an upgrade to 0.0.4 from a previous
+  version.** Version 0.0.4 makes different objects for the `declaration`
+  dimension (see [The four dimensions](#the-four-dimensions)). `map index`
+  builds them again offline. On ripgrep it writes 206 objects in less than
+  4 s. Then commit `.map/`. Until you run `map index`, `map find` uses the
+  objects of the previous version. `map find -u` does not build them, because
+  no file of the repository changed.
+- **Each version reads an index that a different version made.** Versions
+  0.0.0 to 0.0.3 make the same objects for the same resources.
+- **From version 0.0.3, `map find` shows segments that are adjacent as one
+  hit**, and one file has a maximum of two hits. See
   [Search the index](#search-the-index).
 - **`map index` changes one line.** It writes the version of the binary into
   the provenance line of `manifest.json`. `map find -u` writes that line only
@@ -360,10 +364,10 @@ only. `-d` gives a dimension and its text, with an optional weight:
 ```console
 $ map find "refresh_token"                                  # short form for lexical
 $ map find -d 'lexical=gitignore glob' -d 'declaration=Gitignore' -n 4
-crates/ignore/src/gitignore.rs:65  0.732  [declaration 0.59, lexical 0.88]  (lines 1-104; also 449)
-crates/ignore/src/gitignore.rs:289  0.713  [declaration 0.69, lexical 0.74]  (lines 289-392)
-crates/ignore/src/dir.rs:33  0.591  [declaration 0.33, lexical 0.85]  (also 1281, 993, 1441)
-crates/ignore/src/dir.rs:1185  0.545  [declaration 0.65, lexical 0.44]  (lines 1153-1224)
+crates/ignore/src/gitignore.rs:65  0.834  [declaration 0.79, lexical 0.88]  (lines 1-104)
+crates/ignore/src/dir.rs:33  0.724  [declaration 0.60, lexical 0.85]  (also 993, 1281, 1441)
+crates/ignore/src/gitignore.rs:321  0.655  [declaration 0.46, lexical 0.84]  (lines 289-360)
+crates/ignore/src/dir.rs:1153  0.591  [declaration 0.78, lexical 0.41]  (lines 1153-1224)
 
 $ map find -d 'lexical:0.3=parse' -d 'descriptive:1.0=validates user input'
 ```
@@ -377,7 +381,7 @@ lets you select a hit. It is not the full hit:
 
 ```console
 $ map find -d 'declaration=add_line' -d 'lexical=add_line GitignoreBuilder' -n 1 --snippet
-crates/ignore/src/gitignore.rs:449  0.622  [declaration 0.62, lexical 0.62]  (lines 385-488; also 97, 321, 513, +1)
+crates/ignore/src/gitignore.rs:449  0.677  [declaration 0.73, lexical 0.62]  (lines 385-488; also 97, 321, 513, +1)
     [TRUNCATED: lines 385-448 are before this snippet]
     449          Ok(self)
     450      }
@@ -604,6 +608,17 @@ A segment that declares no name has no record in this dimension. BM25 gives the
 scores. Thus a name in this field ranks the segment that declares it above the
 segments that only use it. BM25 on full content does the opposite, because the
 callers contain a name more times than its one declaration does.
+
+A full name has more weight than a part of a name. The descriptor of a segment
+counts each declared name 3 times. It counts a part of a longer name one time,
+also when more than one name of the segment has that part. Thus `fingerprint`
+in this field ranks the declaration of `fingerprint` above the declarations of
+`config_fingerprint` and `artifact_fingerprint`. The longer names stay in the
+list, below it. MAP changes each name to lowercase. Thus `Config` also finds a
+function with the name `config`.
+
+Put names in this field, not a sentence. Each word of a sentence finds the
+declarations that have that word as their name.
 
 Use this dimension together with `lexical`. Do not use it without `lexical`. On
 the ripgrep golden set, the pair gets a higher score than each of the two
@@ -898,7 +913,7 @@ These rules apply:
 ## Committed files
 
 Commit the `.map/` directory. With the two default dimensions on ripgrep, it is
-622 small files and 2.3 MB. `map init` writes two files in `.map/`:
+622 small files and 2.4 MB. `map init` writes two files in `.map/`:
 
 - `.gitignore` tells git to ignore `cache/`. The cache contains derived packs,
   and MAP can build them again.
@@ -1020,16 +1035,16 @@ grep row. For that row, run
 
 | configuration | file nDCG | recall | MRR | ms/query |
 |---|---|---|---|---|
-| grep (coverage) | 0.453 | 0.643 | 0.440 | 18.16 |
-| `lexical` | 0.535 | 0.745 | 0.561 | 2.16 |
-| `declaration` | 0.459 | 0.599 | 0.474 | 0.52 |
-| `semantic` | 0.593 | 0.720 | 0.569 | 4.21 |
-| `descriptive` | 0.554 | 0.690 | 0.535 | 4.25 |
-| `lexical` + `declaration` | 0.621 | 0.784 | 0.642 | 2.17 |
-| `lexical` + `semantic` | 0.624 | 0.761 | 0.604 | 5.27 |
-| `lexical` + `descriptive` | 0.641 | 0.773 | 0.648 | 5.28 |
-| **`lexical` + `declaration` + `descriptive`** | **0.688** | 0.773 | **0.705** | 5.46 |
-| all four | 0.646 | 0.759 | 0.648 | 8.21 |
+| grep (coverage) | 0.453 | 0.643 | 0.440 | 17.38 |
+| `lexical` | 0.535 | 0.745 | 0.561 | 2.02 |
+| `declaration` | 0.468 | 0.623 | 0.464 | 0.49 |
+| `semantic` | 0.593 | 0.720 | 0.569 | 4.13 |
+| `descriptive` | 0.554 | 0.690 | 0.535 | 4.29 |
+| `lexical` + `declaration` | 0.615 | 0.760 | 0.642 | 2.16 |
+| `lexical` + `semantic` | 0.624 | 0.761 | 0.604 | 5.23 |
+| `lexical` + `descriptive` | 0.641 | 0.773 | 0.648 | 5.22 |
+| **`lexical` + `declaration` + `descriptive`** | **0.666** | 0.773 | **0.678** | 5.41 |
+| all four | 0.646 | 0.759 | 0.648 | 7.79 |
 
 - **`lexical` is the base.** Each pair that contains `lexical` gets a higher
   score than each of its two parts gets independently.
@@ -1037,8 +1052,11 @@ grep row. For that row, run
   `lexical`, it finds answers only for queries that contain a declared symbol.
   Together with `lexical`, it puts the answer to each `anchor` query in the set
   at rank 1. It adds no query time that the measurement can show.
+- **The harness puts the full text of each query in each dimension.** Most
+  queries of the set are sentences, and `declaration` is for names. Thus the
+  rows with `declaration` show the result for text that is not only names.
 - **All four dimensions are not the best set.** All four get 0.646.
-  `lexical` + `declaration` + `descriptive` gets 0.688, and all four use 1.5
+  `lexical` + `declaration` + `descriptive` gets 0.666, and all four use 1.4
   times the query time. The two embedding dimensions agree for most queries.
   Thus the fourth dimension decreases the score.
 - **Component queries are the weak point.** A segment search uses more than one
@@ -1060,10 +1078,10 @@ Reachable objects, by determinism tier (spec §6):
 
 | tier | contents | objects | size |
 |---|---|---|---|
-| A | resources, spans, `lexical` and `declaration` descriptors | 618 | 2.16 MB |
+| A | resources, spans, `lexical` and `declaration` descriptors | 618 | 2.17 MB |
 | B | embeddings | 206 | 10.18 MB |
 | C | LLM descriptors and cluster records | 352 | 2.20 MB |
-| **total** | | **1,176** | **14.54 MB** |
+| **total** | | **1,176** | **14.55 MB** |
 
 Search time, from process start to exit. Each value is the median of 10 or 20
 process runs:
@@ -1080,7 +1098,7 @@ an index that has an embedding dimension. That load adds approximately 140 ms
 to each process, also for a search on `lexical` only. A caller that stays in
 memory has that cost one time, and a shell loop has it for each call.
 
-After the load, the time for one query is 2.2 ms on `lexical` and 8.2 ms on
+After the load, the time for one query is 2.0 ms on `lexical` and 7.8 ms on
 all four dimensions. These two values come from the harness.
 
 MAP uses a cached pack only when a marker agrees with the data on disk. The
@@ -1091,7 +1109,7 @@ To do this check, each process hashes all packs of the index. On ripgrep, the
 check is approximately 4 ms for the two default packs (2.4 MB) and
 approximately 17 ms for all four packs (13.0 MB).
 
-The binary is **4.33 MB** by default and **10.20 MB** with all features. See
+The binary is **4.34 MB** by default and **10.21 MB** with all features. See
 [Install](#install) for the size of each feature.
 
 ## Development

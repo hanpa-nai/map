@@ -11,11 +11,33 @@
 //! `function`, `type`, ...) and the `name(...) {` method shape. A grammar per
 //! format would be more precise, and is a different `impl` behind the same
 //! stage; this one runs on any text and costs nothing to build.
+//!
+//! # A name and the parts of a name
+//!
+//! `config_fingerprint` is found by `config` and by `fingerprint` as well as by
+//! its whole name, so that a query does not need the exact spelling. But a
+//! query for `fingerprint` names the thing that is called `fingerprint`, and
+//! a part must not compete with that on equal terms. So the descriptor of a
+//! segment counts a declared name [`WHOLE_NAME`] times, and a part of a longer
+//! name one time, however many names of the segment have that part. Without
+//! the second rule a segment that declares three names ending in
+//! `_fingerprint` holds the word three times, and outranks the one segment
+//! that declares `fingerprint` itself.
+
+use std::collections::BTreeSet;
 
 use map_core::{Classifier, ClassifyBatch, DimensionRecords, Result, Stage};
 use map_format::{Record, RecordKind, RecordMeta};
 
 use crate::lexical::{encode_frequencies, tokenize};
+
+/// How many times a declared name counts in the descriptor of its segment.
+///
+/// BM25 saturates with term frequency, so no count makes a name worth more
+/// than about twice a part. 3 puts a name above its parts. A larger count
+/// changes that order little, and it makes a query of plain words follow the
+/// names that happen to be those words.
+const WHOLE_NAME: usize = 3;
 
 pub struct DeclarationClassifier;
 
@@ -25,7 +47,7 @@ impl Stage for DeclarationClassifier {
     }
 
     fn config(&self) -> String {
-        "declaration:v1".to_owned()
+        "declaration:v2".to_owned()
     }
 }
 
@@ -33,14 +55,11 @@ impl Classifier for DeclarationClassifier {
     fn classify(&self, batch: &ClassifyBatch<'_>) -> Result<Vec<DimensionRecords>> {
         let mut out = Vec::with_capacity(batch.items.len());
         for sources in batch.items {
-            let mut terms = Vec::new();
-            for text in sources {
-                for line in text.lines() {
-                    if let Some(name) = declared_name(line) {
-                        terms.extend(tokenize(name));
-                    }
-                }
-            }
+            let names = sources
+                .iter()
+                .flat_map(|text| text.lines())
+                .filter_map(declared_name);
+            let terms = descriptor_terms(names);
             let mut per_dimension = DimensionRecords::new();
             // A segment that declares nothing gets no record in this dimension:
             // an empty descriptor is unsearchable and the pack builder skips
@@ -71,6 +90,22 @@ impl Classifier for DeclarationClassifier {
         }
         Ok(out)
     }
+}
+
+/// The terms of a segment that declares `names`, each as often as it counts.
+///
+/// The count of a term does not depend on the order of the names: a set holds
+/// the parts, and a part that is also a declared name keeps the two counts.
+fn descriptor_terms<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut parts = BTreeSet::new();
+    for name in names {
+        let whole = name.to_lowercase();
+        parts.extend(tokenize(name).into_iter().filter(|term| *term != whole));
+        terms.extend(std::iter::repeat_n(whole, WHOLE_NAME));
+    }
+    terms.extend(parts);
+    terms
 }
 
 /// Words that may precede a declaration keyword without changing its meaning.
@@ -226,7 +261,53 @@ fn is_identifier(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::declared_name;
+    use super::{declared_name, descriptor_terms, WHOLE_NAME};
+    use crate::lexical::{decode_frequencies, encode_frequencies};
+
+    /// The count of `term` in the descriptor of a segment that declares `names`.
+    fn count(names: &[&str], term: &str) -> u32 {
+        let descriptor = encode_frequencies(&descriptor_terms(names.iter().copied()));
+        decode_frequencies(&descriptor)
+            .into_iter()
+            .find(|(t, _)| *t == term)
+            .map_or(0, |(_, n)| n)
+    }
+
+    #[test]
+    fn a_declared_name_counts_more_than_a_part_of_a_longer_name() {
+        let whole = WHOLE_NAME as u32;
+        assert_eq!(count(&["fingerprint"], "fingerprint"), whole);
+        assert_eq!(count(&["config_fingerprint"], "fingerprint"), 1);
+        assert_eq!(count(&["config_fingerprint"], "config_fingerprint"), whole);
+        // camelCase splits in the same way, and the name is kept in lower case.
+        assert_eq!(count(&["LineStep"], "linestep"), whole);
+        assert_eq!(count(&["LineStep"], "step"), 1);
+    }
+
+    #[test]
+    fn a_part_counts_one_time_however_many_names_of_the_segment_have_it() {
+        // Three names that end in the word must not add up to the weight of
+        // the one name that is the word.
+        let names = [
+            "config_fingerprint",
+            "artifact_fingerprint",
+            "fab_fingerprint",
+        ];
+        assert_eq!(count(&names, "fingerprint"), 1);
+        // Each declaration of the name itself does count.
+        assert_eq!(
+            count(&["Config", "Config"], "config"),
+            2 * WHOLE_NAME as u32
+        );
+    }
+
+    #[test]
+    fn the_count_of_a_term_does_not_depend_on_the_order_of_the_names() {
+        let a = count(&["fingerprint", "config_fingerprint"], "fingerprint");
+        let b = count(&["config_fingerprint", "fingerprint"], "fingerprint");
+        assert_eq!(a, b);
+        assert_eq!(a, WHOLE_NAME as u32 + 1, "the name, and the part");
+    }
 
     #[test]
     fn keyword_declarations_name_the_next_word() {
