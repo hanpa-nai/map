@@ -181,6 +181,14 @@ cache/
 /// content conflict with markers -- which is exactly what would happen with no
 /// attribute at all. So the attribute costs a machine without the driver
 /// nothing and buys every machine with it a resolved merge.
+///
+/// The line-end lines are for a clone on Windows, where git checks a text file
+/// out with CRLF and MAP writes LF. A file that MAP then wrote with the same
+/// content showed as modified in `git status`, and each `git add` printed a
+/// warning. `text eol=lf` and not `-text` for the four text files: measured
+/// in a clone that already had CRLF files, `-text` made git report three of
+/// them as changed in every line, and `text eol=lf` reported none. `-text`
+/// for the objects, which are bytes that a content hash covers.
 const GITATTRIBUTES: &str = "\
 # A pull request shows these files closed, and a reviewer can open them.
 # A committed index controls the text that a model reads. Thus it must be
@@ -192,6 +200,14 @@ manifest.json linguist-generated=true
 # command to the local git configuration. A machine without the driver gets
 # the usual git text merge, the same as with no attribute.
 manifest.json merge=map
+
+# Line ends. MAP writes these files with LF, and they have LF in each clone.
+# Git does not change the bytes of an object.
+manifest.json text eol=lf
+config.toml text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+index/** -text
 ";
 
 /// Outcome of an init run.
@@ -345,6 +361,28 @@ mod tests {
         // and the same outcome as omitting the attribute -- so declaring it
         // costs that machine nothing.
         assert!(GITATTRIBUTES.contains("manifest.json merge=map"));
+    }
+
+    #[test]
+    fn gitattributes_keeps_the_bytes_that_map_writes_in_each_clone() {
+        for file in [
+            "manifest.json",
+            "config.toml",
+            ".gitignore",
+            ".gitattributes",
+        ] {
+            assert!(
+                GITATTRIBUTES.contains(&format!("\n{file} text eol=lf\n")),
+                "{file}"
+            );
+        }
+        assert!(GITATTRIBUTES.contains("\nindex/** -text\n"));
+        // `-text` on a text file makes a clone that has CRLF files report
+        // each line of them as changed. `text` on an object lets git change
+        // bytes that a content hash covers.
+        assert!(!GITATTRIBUTES.contains("\n* "));
+        // The file is one that the attribute names, so it must have LF.
+        assert!(!GITATTRIBUTES.contains('\r'));
     }
 
     #[test]

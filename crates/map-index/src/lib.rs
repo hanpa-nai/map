@@ -297,7 +297,7 @@ fn run_inner(
     // Loaded before anything is written: it is the only record of what each
     // stored object's bytes should hash to, and every reuse below is checked
     // against it (spec §8).
-    let prior = prior_manifest(&map_dir)?;
+    let (prior, prior_bytes) = prior_manifest(&map_dir)?.unzip();
 
     let shared = ObjectStore::open(map_dir.join("index/shared/objects"));
     let descriptors = ObjectStore::open(map_dir.join("index/desc/objects"));
@@ -695,8 +695,26 @@ fn run_inner(
         )?;
     }
 
-    let manifest_bytes = manifest.to_bytes()?;
-    write_atomic(&map_dir.join("manifest.json"), &manifest_bytes)?;
+    // A run that changes nothing in the index leaves the manifest file as it
+    // is. With a new timestamp instead, every run of `map index` is a change
+    // to commit, and two branches that each ran it conflict on the provenance
+    // line with nothing else to merge.
+    //
+    // Not written at all, rather than written with the same content: git on
+    // Windows checks the file out with CRLF line ends, and it reports a file
+    // whose size changed as modified without a look at the content. The same
+    // manifest with LF line ends is then a modified file with an empty diff.
+    let unchanged = prior
+        .as_ref()
+        .is_some_and(|prior| manifest.same_content(prior));
+    let manifest_bytes = match prior_bytes {
+        Some(bytes) if unchanged => bytes,
+        _ => {
+            let bytes = manifest.to_bytes()?;
+            write_atomic(&map_dir.join("manifest.json"), &bytes)?;
+            bytes
+        }
+    };
 
     // Packs are derived: gitignored, rebuildable, and written after the manifest
     // so a crash leaves a stale cache rather than one that claims to describe an
@@ -1341,7 +1359,10 @@ fn model_cache_dir() -> std::path::PathBuf {
 /// been indexed. An unreadable one is an error rather than a fresh start:
 /// treating it as absent would silently drop the integrity baseline and adopt
 /// whatever bytes happen to be there.
-fn prior_manifest(map_dir: &Path) -> Result<Option<Manifest>, IndexError> {
+///
+/// The bytes come back with it: a run that changes nothing records them, and
+/// not the bytes it would write, as the manifest that its snapshot is for.
+fn prior_manifest(map_dir: &Path) -> Result<Option<(Manifest, Vec<u8>)>, IndexError> {
     let path = map_dir.join("manifest.json");
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
@@ -1349,7 +1370,10 @@ fn prior_manifest(map_dir: &Path) -> Result<Option<Manifest>, IndexError> {
         Err(e) => return Err(IndexError::Io { path, source: e }),
     };
     match Manifest::from_bytes(&bytes) {
-        Ok(manifest) => Ok(Some(manifest)),
+        Ok(manifest) => Ok(Some((manifest, bytes))),
+        // Said as it is: that message gives the repair for a merge, and
+        // "restore it, or delete it" is the wrong advice for one.
+        Err(e @ map_format::Error::ConflictMarkers) => Err(IndexError::Format(e)),
         Err(e) => Err(IndexError::UnreadableManifest {
             path,
             detail: e.to_string(),

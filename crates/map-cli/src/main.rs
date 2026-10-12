@@ -107,14 +107,20 @@ enum Command {
     /// Three-way merge of `.map/manifest.json`. Git runs this command.
     ///
     /// `map init` and `map index` set this command as the `map` merge driver.
-    /// Git runs it as `map merge %O %A %B`. When two branches each change a
-    /// different resource and build the index again, the two manifests are in
-    /// conflict. A text merge cannot see the difference between a correct
-    /// union of object tables and a collision of one key with different bytes.
+    /// `map find -u` also sets it when it updates the index. Git runs it as
+    /// `map merge %O %A %B`. When two branches each change a different
+    /// resource and build the index again, the two manifests are in conflict.
+    /// A text merge cannot see the difference between a correct union of
+    /// object tables and a collision of one key with different bytes.
     ///
-    /// The command writes the merged manifest to `ours` and stops with status
-    /// 0. On a conflict, it does not change `ours`, and it stops with status
-    /// 1. Git then marks the file as a file with a conflict.
+    /// The command writes the merged manifest to `ours` and stops with
+    /// status 0. On a conflict, it does not change `ours`, and it stops with
+    /// status 1. Git then marks the file as a file with a conflict.
+    ///
+    /// When the two branches changed the same resource, that is not a
+    /// conflict. The merged manifest keeps the entry of `ours` for that
+    /// resource, and the command prints the name of the resource. Run
+    /// `map index` or `map find -u` after the merge to update the entry.
     Merge {
         /// The file of the ancestor (`%O` in git). Empty when there is no
         /// ancestor.
@@ -783,17 +789,76 @@ fn merge_manifests(base: &Path, ours: &Path, theirs: &Path) -> Result<bool, Stri
             for note in &merged.notes {
                 eprintln!("map: {note}");
             }
+            if let Some(note) = stale_note(&merged.stale) {
+                eprintln!("map: {note}");
+            }
             Ok(true)
         }
         Err(conflicts) => {
             for conflict in &conflicts {
                 eprintln!("map: manifest merge conflict: {conflict}");
             }
+            if let Some(repair) = repair_for(&conflicts) {
+                eprintln!("map: {repair}");
+            }
             // `ours` is left exactly as git wrote it, so the working-tree file
             // still holds our version for the operator to resolve against.
             Ok(false)
         }
     }
+}
+
+/// The line for a merge that kept our entry of some resources.
+///
+/// Git shows it in the output of the merge. Without it nothing says that
+/// those entries are of one side: the merge has no conflict, and a search
+/// prints no notice for an index that is behind.
+fn stale_note(resources: &[String]) -> Option<String> {
+    /// A merge of two long branches can have many. The update command is the
+    /// same for one and for fifty, so the rest is a count.
+    const SHOWN: usize = 5;
+    if resources.is_empty() {
+        return None;
+    }
+    let mut names = resources
+        .iter()
+        .take(SHOWN)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if resources.len() > SHOWN {
+        names.push_str(&format!(", and {} more", resources.len() - SHOWN));
+    }
+    let kept = match resources.len() {
+        1 => "The index keeps the entry of `ours` for it, and that entry can be out of date.",
+        _ => "The index keeps the entries of `ours` for them, and those can be out of date.",
+    };
+    Some(format!(
+        "the two sides changed {names}. {kept} After the merge, run `map index` or `map find -u`."
+    ))
+}
+
+/// What to do about a manifest that the driver did not merge, when an index
+/// build is the whole answer.
+///
+/// It is for a conflict in what the index is built from: the two sides
+/// changed the configuration, or one dimension. `ours` is a whole manifest,
+/// so the build starts from it with nothing to repair first.
+///
+/// Not for one key with two contents, and not for two formats. A build stops
+/// on the first, and cannot read the second.
+fn repair_for(conflicts: &[map_format::manifest::MergeConflict]) -> Option<&'static str> {
+    use map_format::manifest::MergeConflict;
+    let a_build_resolves_it = conflicts.iter().all(|conflict| {
+        !matches!(
+            conflict,
+            MergeConflict::Object { .. } | MergeConflict::Format
+        )
+    });
+    a_build_resolves_it.then_some(
+        "to resolve this conflict, first resolve the conflicts in the other files. Then run \
+         `map index` and `git add .map`.",
+    )
 }
 
 /// Render a path for a person to read.
@@ -1233,6 +1298,14 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
         let updated = updated.map_err(|e| e.to_string())?;
 
         if let Some(stats) = updated {
+            // An agent that follows `map brief` updates the index with `-u`
+            // and never runs `map index`, so this is the only place its clone
+            // gets the driver. Only after a run that did the work: the probe
+            // is a `git` process, which costs as much as the search does when
+            // the index is not stale.
+            if let Some(root) = map_core::find_map_root(&args.path) {
+                register_merge_driver(&root);
+            }
             if stats.objects_written > 0 && !args.quiet {
                 eprintln!(
                     "map: updated {} object(s) before searching",
@@ -1499,8 +1572,8 @@ fn report_staleness(args: &FindArgs) {
 mod tests {
     use super::{
         display_path, driver_program, merge_manifests, newer_index_hint, parse_dim, parse_levels,
-        repository_at_or_above, should_register, snippet_lines, spread_note, status_text,
-        ProgressLine,
+        repair_for, repository_at_or_above, should_register, snippet_lines, spread_note,
+        stale_note, status_text, ProgressLine,
     };
     use map_format::{Manifest, ObjectEntry, ObjectKey, Tier};
     use map_query::LevelFilter;
@@ -1858,12 +1931,48 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_merge_leaves_our_file_untouched() {
-        // Git reads the result out of `ours`, so writing a partial resolution
-        // there would hand the operator a manifest neither side ever built.
+    fn a_merge_keeps_our_entry_of_a_resource_that_each_side_changed() {
+        // The measured case: git merges `menus.rs` with no conflict, and each
+        // manifest names different objects for it. The merge must not stop.
         let base = manifest_with("a.rs", b"base");
         let ours = manifest_with("a.rs", b"ours");
         let theirs = manifest_with("a.rs", b"theirs");
+
+        let (_dir, base_path, ours_path, theirs_path) =
+            merge_fixture("common", Some(&base), &ours, &theirs);
+        assert!(merge_manifests(&base_path, &ours_path, &theirs_path).unwrap());
+
+        let merged = Manifest::from_bytes(&std::fs::read(&ours_path).unwrap()).unwrap();
+        assert!(merged.same_content(&ours));
+    }
+
+    #[test]
+    fn the_note_names_the_resources_and_the_update() {
+        assert_eq!(stale_note(&[]), None);
+
+        let note = stale_note(&["src/a.rs".to_owned()]).unwrap();
+        assert!(note.contains("src/a.rs") && note.contains("`map index`"));
+        assert!(note.contains("the entry of `ours` for it"), "{note}");
+        assert!(!note.contains("more"));
+
+        let many: Vec<String> = (0..8).map(|i| format!("f{i}.rs")).collect();
+        let note = stale_note(&many).unwrap();
+        assert!(note.contains("f4.rs, and 3 more"), "{note}");
+        assert!(note.contains("the entries of `ours` for them"), "{note}");
+        assert!(!note.contains("f5.rs"));
+    }
+
+    #[test]
+    fn a_conflicting_merge_leaves_our_file_untouched() {
+        // Git reads the result out of `ours`, so writing a partial resolution
+        // there would hand the operator a manifest neither side ever built.
+        // One key with two contents is a conflict that stays.
+        let base = manifest_with("a.rs", b"base");
+        let ours = manifest_with("b.rs", b"same key");
+        let mut theirs = manifest_with("c.rs", b"same key");
+        for entry in theirs.objects.values_mut() {
+            entry.content_hash = map_format::ContentHash::of(b"other bytes");
+        }
 
         let (_dir, base_path, ours_path, theirs_path) =
             merge_fixture("conflict", Some(&base), &ours, &theirs);
@@ -1875,6 +1984,30 @@ mod tests {
             before,
             "a conflicted merge must not rewrite our side"
         );
+    }
+
+    #[test]
+    fn a_conflict_that_an_index_build_resolves_says_so() {
+        use map_format::manifest::MergeConflict;
+        // The two sides changed the configuration. The text of the conflict
+        // says what is wrong, and the repair says the commands.
+        let repair = repair_for(&[MergeConflict::ConfigFingerprint])
+            .expect("a build resolves a conflict of the configuration");
+        assert!(repair.contains("`map index`") && repair.contains("`git add .map`"));
+        let dimension = MergeConflict::Dimension {
+            name: "lexical".to_owned(),
+        };
+        assert!(repair_for(&[dimension]).is_some());
+
+        // A build stops on one key with two contents, so it is not the advice.
+        let hash = map_format::ContentHash::of(b"x");
+        let collision = MergeConflict::Object {
+            key: "k".to_owned(),
+            ours: hash,
+            theirs: hash,
+        };
+        assert_eq!(repair_for(&[collision]), None);
+        assert_eq!(repair_for(&[MergeConflict::Format]), None);
     }
 
     #[test]

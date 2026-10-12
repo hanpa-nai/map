@@ -433,6 +433,144 @@ fn indexing_twice_is_byte_identical() {
     assert!(!first.is_empty());
 }
 
+fn manifest_of(corpus: &Corpus) -> Manifest {
+    Manifest::from_bytes(&fs::read(corpus.path().join(".map/manifest.json")).unwrap()).unwrap()
+}
+
+#[test]
+fn a_run_that_changes_nothing_leaves_the_manifest_file_as_it_is() {
+    // The manifest is a committed file. A new timestamp on every run makes
+    // each `map index` a change to commit, and two branches that each ran it
+    // then conflict on the provenance line with nothing else to merge.
+    let corpus = Corpus::new("quiet-run");
+    map_index::run(corpus.path()).unwrap();
+
+    // The run before was an earlier one, by an earlier version. Only the
+    // provenance is different from what a run writes now. The line ends are
+    // those of a git checkout on Windows: git reports a file of a different
+    // size as modified, so the same content with LF is a change to it.
+    let path = corpus.path().join(".map/manifest.json");
+    let mut earlier = manifest_of(&corpus);
+    earlier.provenance = map_format::Provenance {
+        map_version: "0.0.0-earlier".to_owned(),
+        generated_at: 1,
+    };
+    let before = String::from_utf8(earlier.to_bytes().unwrap())
+        .unwrap()
+        .replace('\n', "\r\n")
+        .into_bytes();
+    fs::write(&path, &before).unwrap();
+
+    let quiet = map_index::run(corpus.path()).unwrap();
+    assert_eq!(quiet.objects_written, 0);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    // The snapshot of that run is for the file that is there. If it were for
+    // the bytes that the run did not write, each later `-u` would do a run.
+    assert!(!map_index::stale(corpus.path()).unwrap().unwrap().is_stale());
+    assert_eq!(map_index::refresh(corpus.path()).unwrap(), None);
+
+    // And the check can fail: a run that changes the index says who ran, and
+    // when.
+    fs::write(
+        corpus.path().join("src/logging.rs"),
+        "pub fn configure_logger(level: Level) {\n    flush();\n}\n",
+    )
+    .unwrap();
+    map_index::run(corpus.path()).unwrap();
+    let after = manifest_of(&corpus);
+    assert!(after.provenance.generated_at > 1);
+    assert_ne!(after.provenance.map_version, "0.0.0-earlier");
+}
+
+#[test]
+fn a_merge_of_two_index_builds_is_the_build_of_the_merged_resources() {
+    // Two branches each change resources and build the index. When no
+    // resource changed on the two sides, the merged manifest must be the one
+    // that a build of the merged tree writes. If it is not, the first build
+    // after the merge changes a committed file, and the merge was not the end
+    // of the work.
+    let corpus = Corpus::new("merge-equals-build");
+    let session = corpus.path().join("src/session.rs");
+    let logging = corpus.path().join("src/logging.rs");
+    let geometry = corpus.path().join("src/geometry.rs");
+    let added = corpus.path().join("src/added.rs");
+    let session_at_base = fs::read(&session).unwrap();
+
+    map_index::run(corpus.path()).unwrap();
+    let base = manifest_of(&corpus);
+
+    // Our side changes one resource and adds one.
+    let our_edit = || {
+        fs::write(&session, "pub fn expire(session: &mut Session) {}\n").unwrap();
+        fs::write(&added, "pub fn added_on_our_side() {}\n").unwrap();
+    };
+    our_edit();
+    map_index::run(corpus.path()).unwrap();
+    let ours = manifest_of(&corpus);
+
+    // Their side starts from the base again. It changes a different resource
+    // and deletes one.
+    fs::write(&session, &session_at_base).unwrap();
+    fs::remove_file(&added).unwrap();
+    fs::write(&logging, "pub fn quiet() {}\n").unwrap();
+    fs::remove_file(&geometry).unwrap();
+    map_index::run(corpus.path()).unwrap();
+    let theirs = manifest_of(&corpus);
+
+    // The merged tree has the changes of the two sides.
+    our_edit();
+    map_index::run(corpus.path()).unwrap();
+    let built = manifest_of(&corpus);
+
+    let merged = Manifest::merge(Some(&base), &ours, &theirs)
+        .unwrap()
+        .manifest;
+    assert_eq!(
+        merged.roots.keys().collect::<Vec<_>>(),
+        ["src/added.rs", "src/logging.rs", "src/session.rs"]
+    );
+    assert!(
+        merged.same_content(&built),
+        "the merge holds {} objects and the build holds {}",
+        merged.objects.len(),
+        built.objects.len()
+    );
+
+    // And the check can fail: the two tables together hold entries that the
+    // build does not, which is what a union of them keeps.
+    let union: std::collections::BTreeSet<&String> =
+        ours.objects.keys().chain(theirs.objects.keys()).collect();
+    assert!(union.len() > built.objects.len());
+}
+
+#[test]
+fn a_manifest_with_conflict_markers_stops_the_run_with_the_repair() {
+    // Without the merge driver, git leaves its markers in the manifest.
+    // "Restore it, or delete it" is the wrong advice for that file: one
+    // command takes a side, and the run then builds the merged index.
+    let corpus = Corpus::new("conflict-markers");
+    map_index::run(corpus.path()).unwrap();
+
+    let path = corpus.path().join(".map/manifest.json");
+    let text = fs::read_to_string(&path).unwrap();
+    let line = text.lines().find(|l| l.contains("\"tier\"")).unwrap();
+    let marked = text.replacen(
+        line,
+        &format!("<<<<<<< HEAD\n{line}\n=======\n{line}\n>>>>>>> develop"),
+        1,
+    );
+    fs::write(&path, &marked).unwrap();
+
+    let err = map_index::run(corpus.path()).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("conflict markers") && message.contains("git checkout --ours"),
+        "{message}"
+    );
+    assert!(!message.contains("delete it"), "{message}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), marked);
+}
+
 #[test]
 fn unchanged_resources_do_not_re_run_the_classifier() {
     // The classifier is the expensive stage. Deduplicating on write would

@@ -177,6 +177,19 @@ pub enum Error {
         expected: &'static str,
     },
 
+    /// A git text merge stopped in the manifest and left its markers there.
+    ///
+    /// Named rather than reported as the JSON error it also is. "key must be a
+    /// string at line 111" sends the reader to a line of a generated file, and
+    /// the cause is a merge that three commands finish. One line, because the
+    /// callers quote this inside their own sentence.
+    #[error(
+        "the manifest has git conflict markers, because a merge stopped in `.map/manifest.json`. \
+         Resolve the conflicts in the other files first. Then, in the directory that contains \
+         `.map`, run `git checkout --ours .map/manifest.json`, `map index`, and `git add .map`."
+    )]
+    ConflictMarkers,
+
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 

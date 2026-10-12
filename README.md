@@ -14,7 +14,7 @@ type of a resource. Discovery reads a directory tree, and the segmenter cuts
 line windows. The prompts and the dimension descriptions of a corpus tell a
 model the type of its material.
 
-> **Status: alpha (`v0.0.4`).** The format on disk is a draft and can change.
+> **Status: alpha (`v0.0.5`).** The format on disk is a draft and can change.
 > See [`spec/format-v1.md`](spec/format-v1.md). MAP is not on crates.io. Build
 > it from source.
 
@@ -200,14 +200,27 @@ in a new directory.
 - **From version 0.0.3, `map find` shows segments that are adjacent as one
   hit**, and one file has a maximum of two hits. See
   [Search the index](#search-the-index).
-- **`map index` changes one line.** It writes the version of the binary into
-  the provenance line of `manifest.json`. `map find -u` writes that line only
-  when it does an index build. It does no index build when the index is not
-  stale.
+- **From version 0.0.5, an index build that changes no entry does not write
+  `manifest.json`.** The provenance line keeps the version and the time of
+  the build that last changed the index. Thus an upgrade does not make a
+  change that you must commit.
+- **From version 0.0.5, `map init` sets the line ends of `.map/` in
+  `.map/.gitattributes`.** An index from a previous version does not have
+  these lines, and on Windows git then gives CRLF line ends to four files of
+  `.map/`. To add the lines, put this text at the end of
+  `.map/.gitattributes`, and commit the file:
+
+  ```
+  manifest.json text eol=lf
+  config.toml text eol=lf
+  .gitignore text eol=lf
+  .gitattributes text eol=lf
+  index/** -text
+  ```
 - **The git merge driver continues to operate.** The driver command contains
-  the path of the binary. If no binary is at that path, `map init` and
-  `map index` write the path of the binary that runs into the git
-  configuration.
+  the path of the binary. If no binary is at that path, MAP writes the path of
+  the binary that runs into the git configuration. `map init`, `map index`,
+  and an update with `map find -u` do this.
 - **A binary tells you when an index is from a newer version of MAP:**
 
   ```
@@ -938,7 +951,10 @@ Commit the `.map/` directory. With the two default dimensions on ripgrep, it is
 - `.gitignore` tells git to ignore `cache/`. The cache contains derived packs,
   and MAP can build them again.
 - `.gitattributes` marks the index as `linguist-generated`. Thus a pull request
-  shows the index diff closed, and a reviewer can open it.
+  shows the index diff closed, and a reviewer can open it. It names the merge
+  driver (see [Merge](#merge)). It also sets LF line ends for the text files
+  of `.map/`, and it tells git not to change the bytes of an object. Thus a
+  clone on Windows has the same bytes as a clone on Linux.
 
 Descriptors and cluster labels are JSON. Thus a reviewer can read them. MAP
 stores the tensors of a segment as binary little-endian frames. On a new clone,
@@ -947,9 +963,9 @@ record keeps its tensor in its JSON record.
 
 MAP writes the manifest with one entry on each line. `dimensions`, `objects`,
 `roots`, and `clusters` each have one line for each key. The keys are in sorted
-sequence, with an indent of two spaces and LF line ends. Thus two edits that
-have no overlap are on different lines, and a text merge can merge them. A
-review diff shows only the entries that changed.
+sequence, with an indent of two spaces and LF line ends. Thus a review diff
+shows only the entries that changed. A text merge of two manifests usually
+stops with a conflict, and the merge driver is necessary (see [Merge](#merge)).
 
 Two index builds make **byte-identical** objects. A clone that searches with no
 index build gets the same hits and the same scores.
@@ -974,34 +990,97 @@ again.
 makes `map merge` the git merge driver for the manifest.
 
 `map init` and `map index` also add the driver command to the **local** git
-configuration of the repository. They do this when there is a `.git` entry, git
-runs, and the configuration has no driver. The first time, MAP prints
+configuration of the repository. `map find -u` adds it when it updates the
+index. They do this when there is a `.git` entry, git runs, and the
+configuration has no driver. The first time, MAP prints
 `map: registered git merge driver for .map/manifest.json`.
 
 Git does not run a command that a repository supplies. Thus the attribute goes
-with a clone, but each machine must add the driver command. To add it in a new
-clone, run `map index`.
+with a clone, but each machine must add the driver command. In a new clone,
+the first `map index` or the first `map find -u` adds it.
 
 The driver does a three-way merge of the manifests:
 
-- It uses the union of the object tables, because each side usually adds
-  different objects.
+- Roots and dimension identities merge three-way, one key at a time.
+- The object table starts as the union of the two tables. The driver then
+  removes each entry that no merged root and no merged cluster tree uses. The
+  result is the table that `map index` writes for the merged files.
 - One key with different bytes on each side is a conflict. A union cannot
   resolve it.
-- Roots and dimension identities merge three-way, one key at a time.
+- For a file that the two branches changed, the driver keeps the entry of one
+  side (see below).
 - If each side built a new cluster tree for the same dimension, the driver
-  removes the tree. The cluster objects stay on disk. The next `map index`
-  builds the tree again and uses each subtree that did not change.
+  removes the tree. The cluster objects stay on disk, and their entries stay
+  in the object table. The next `map index` builds the tree again and uses
+  each subtree that did not change.
 - For provenance, the driver keeps the newer `generated_at`.
 
-On a conflict, the driver prints each conflict on stderr, does not change the
-file, and stops with status 1. Git then marks the file as a file with a
-conflict.
+When the two branches changed different files, the merge is automatic. A
+subsequent `map index` changes no committed file.
 
-A clone that did not add the driver gets the usual git text merge with conflict
-markers. With git 2.55, the text merge merges edits to dimensions, objects, and
-roots that have no overlap. It always gives a conflict on the provenance line,
-because each `map index` run changes that line.
+#### A file that the two branches changed
+
+Each manifest then has different objects for that file. The driver has only
+the manifests. Thus it cannot build the entry of the merged file. It does not
+stop the merge. It keeps the entry of `ours`, and it prints the name of the
+file on stderr:
+
+```
+map: the two sides changed src/session.rs. The index keeps the entry of `ours` for it, and that entry can be out of date. After the merge, run `map index` or `map find -u`.
+```
+
+`ours` is the branch that you merge into. During `git rebase`, `ours` is the
+branch that is the new base.
+
+After the merge, the index is one step behind for that file. `map find`
+continues to find the file, and a hit can show a line that moved. To update
+the entry:
+
+1. Resolve the conflicts in the other files, if there are conflicts.
+2. Run `map index` or `map find -u`.
+3. Commit `.map/`.
+
+Do step 1 first. If the update runs before it, MAP makes objects from a file
+that contains conflict markers.
+
+#### A conflict that stops the merge
+
+The driver stops with status 1, and does not change the manifest, in these
+conditions:
+
+- One object key has different bytes on each side.
+- The two sides changed `config.toml`, or the identity of one dimension.
+- The two manifests have a different `format_version` or `hash_algo`.
+
+The driver prints each conflict on stderr. Git then marks the manifest as a
+file with a conflict. For a change to `config.toml` or to a dimension, merge
+`config.toml` first. Then run `map index` and `git add .map`.
+
+#### A clone that has no driver
+
+A clone that did not add the driver gets the usual git text merge. When each
+branch changed the index, the text merge stops with a conflict, because each
+change to the index writes the provenance line. Git puts conflict markers in
+the manifest. Each MAP command then stops with a message that gives the
+repair, and `map brief` gives the same repair to an agent. The repair has one
+more command:
+
+```console
+$ git checkout --ours .map/manifest.json
+$ map index
+$ git add .map
+```
+
+`git checkout --ours` gets the manifest of one side back. `map index` then
+builds the entries of the merged files, and it adds the driver.
+
+#### A merge on a git server
+
+The driver command is in the local git configuration of one clone. A git
+server does not have it. Thus a pull request can show a conflict in
+`.map/manifest.json` when its branch and the target branch each changed the
+index. To resolve it, merge the target branch into your branch on your
+machine, and push.
 
 ### Remove unreachable objects
 

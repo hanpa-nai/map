@@ -106,8 +106,10 @@ pub struct ResourceRoot {
 /// back only alongside a consumer that reads it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provenance {
+    /// The version of the run that last changed the index. A later run that
+    /// finds nothing to change leaves the two fields as they are.
     pub map_version: String,
-    /// Unix seconds.
+    /// Unix seconds, of that same run.
     pub generated_at: u64,
 }
 
@@ -211,6 +213,35 @@ impl Manifest {
         self.objects.get(&key.to_string())
     }
 
+    /// Every object key that a root or a cluster tree names.
+    ///
+    /// An index build records an object only when one of these names it, so
+    /// for a manifest that a build wrote this is the whole object table. An
+    /// entry outside this set is one that no query can reach.
+    pub fn named_keys(&self) -> BTreeSet<String> {
+        let roots = self.roots.values().flat_map(|root| {
+            std::iter::once(&root.segments)
+                .chain(root.descriptors.values())
+                .chain(root.tensors.values())
+        });
+        roots
+            .chain(self.clusters.values().flatten())
+            .map(ObjectKey::to_string)
+            .collect()
+    }
+
+    /// Whether the two manifests describe the same index: every field but
+    /// [`Provenance`], which says who wrote it and when.
+    pub fn same_content(&self, other: &Manifest) -> bool {
+        self.format_version == other.format_version
+            && self.hash_algo == other.hash_algo
+            && self.config_fingerprint == other.config_fingerprint
+            && self.dimensions == other.dimensions
+            && self.objects == other.objects
+            && self.roots == other.roots
+            && self.clusters == other.clusters
+    }
+
     /// Digest over everything that is expected to be reproducible.
     ///
     /// Excludes [`Provenance`], which carries a wall clock. This is what the
@@ -247,12 +278,15 @@ impl Manifest {
     /// `dimensions`, `objects`, `roots` and `clusters`, gets its own line.
     ///
     /// Why: emitted as one line, a ripgrep-sized manifest is 265 KB of text
-    /// that git can only treat as a single atom. Two people re-indexing
-    /// disjoint parts of a repository then produce a conflict on that one line
-    /// every time, and the review diff says nothing beyond "it changed". One
-    /// entry per line makes disjoint edits merge textually and makes the diff
-    /// name the objects that actually moved. [`Manifest::merge`] is for what
-    /// the textual merge cannot resolve.
+    /// that git can only treat as a single atom, and the review diff says
+    /// nothing beyond "it changed". One entry per line makes the diff name the
+    /// objects that actually moved.
+    ///
+    /// It does not make a text merge of two index builds resolve. The object
+    /// table is sorted by key, so the entries that two sides changed land on
+    /// adjacent lines often enough to conflict, and the provenance line
+    /// conflicts whenever both sides wrote one. [`Manifest::merge`] is what
+    /// resolves a merge.
     ///
     /// [`Manifest::from_bytes`] needs no change — this is ordinary JSON — and
     /// neither does [`Manifest::determinism_digest`], which hashes its own
@@ -325,7 +359,14 @@ impl Manifest {
     /// newer index — reading fields that moved and ignoring ones it does not
     /// know — instead of saying "this index needs a newer map".
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let manifest: Manifest = serde_json::from_slice(bytes)?;
+        let manifest: Manifest = match serde_json::from_slice(bytes) {
+            Ok(manifest) => manifest,
+            // Looked for only after the parse fails, so a manifest that reads
+            // pays nothing for it. Markers are never valid JSON, so nothing
+            // that parses can hold them.
+            Err(_) if has_conflict_markers(bytes) => return Err(Error::ConflictMarkers),
+            Err(e) => return Err(e.into()),
+        };
 
         if manifest.format_version != MANIFEST_VERSION {
             return Err(Error::UnsupportedVersion {
@@ -345,17 +386,26 @@ impl Manifest {
 
     /// Three-way merge of two manifests against their common ancestor.
     ///
-    /// Line-oriented [`Manifest::to_bytes`] lets git merge the disjoint case on
-    /// its own. This is for the rest: a textual merge cannot tell a legitimate
-    /// union of object tables from a same-key/different-bytes collision, and it
-    /// cannot know that two re-fabricated cluster trees describe neither side's
+    /// A textual merge cannot do this: it cannot tell a legitimate union of
+    /// object tables from a same-key/different-bytes collision, and it cannot
+    /// know that two re-fabricated cluster trees describe neither side's
     /// object set.
+    ///
+    /// The result holds what an index build of the merged resources records:
+    /// the merged roots, and the entries those roots and the cluster trees
+    /// name. So a build after a merge that had no conflict changes nothing.
     ///
     /// "Three-way" on a single value means: equal on both sides, take it;
     /// unchanged on our side, take theirs; unchanged on theirs, take ours;
     /// otherwise a conflict. A key missing on one side is a deletion when
     /// `base` had it and the other side left it alone, and an addition when
     /// `base` lacked it. `base` of `None` is an empty ancestor.
+    ///
+    /// A resource that each side indexed again is not a conflict. The merge
+    /// only has the manifests, so it cannot build the entry of the merged
+    /// resource. It keeps what `ours` holds and lists the resource in
+    /// [`Merged::stale`]. That is the ordinary state of an index one edit
+    /// behind its resource, and the next index build puts it right.
     ///
     /// Every conflict is collected — resolving a manifest one rejected merge at
     /// a time is worse than seeing the whole list.
@@ -409,6 +459,8 @@ impl Manifest {
         // Union, not three-way: objects are immutable and input-addressed, so
         // two sides adding different objects is the ordinary case. The same key
         // with different bytes is the one thing union cannot express (spec §4).
+        // The union is only where this starts: the entries that the merged
+        // roots no longer name are taken out below.
         let mut objects = ours.objects.clone();
         for (key, theirs_entry) in &theirs.objects {
             match objects.get(key) {
@@ -427,6 +479,7 @@ impl Manifest {
         }
 
         let mut roots = BTreeMap::new();
+        let mut stale = Vec::new();
         for resource in union_keys(base.map(|b| &b.roots), &ours.roots, &theirs.roots) {
             match three_way(
                 base.and_then(|b| b.roots.get(resource)),
@@ -437,15 +490,27 @@ impl Manifest {
                     roots.insert(resource.clone(), root);
                 }
                 Some(None) => {}
-                None => conflicts.push(MergeConflict::Root {
-                    resource: resource.clone(),
-                }),
+                None => {
+                    // Measured on a real merge: with no entry, a search for a
+                    // name that this resource declares ranks another file
+                    // first and says nothing. With the entry of one side the
+                    // resource is still found. `ours` is the side whose
+                    // objects are in the work tree in each kind of merge.
+                    if let Some(root) = ours.roots.get(resource) {
+                        roots.insert(resource.clone(), root.clone());
+                    }
+                    stale.push(resource.clone());
+                }
             }
         }
 
         // Runs after `dimensions` because dropping a tree rewrites the built
         // levels that describe it.
         let mut clusters = BTreeMap::new();
+        // The clusters of a dropped tree. Nothing names them any more, and the
+        // next index build still reuses them, so their entries stay: a reused
+        // object is checked against the hash recorded here (spec §8).
+        let mut reusable: BTreeSet<String> = BTreeSet::new();
         for name in union_keys(base.map(|b| &b.clusters), &ours.clusters, &theirs.clusters) {
             match three_way(
                 base.and_then(|b| b.clusters.get(name)),
@@ -465,6 +530,10 @@ impl Manifest {
                     // every unchanged subtree.
                     if let Some(identity) = dimensions.get_mut(name) {
                         identity.levels = vec![0];
+                    }
+                    for side in [ours, theirs] {
+                        let tree = side.clusters.get(name).into_iter().flatten();
+                        reusable.extend(tree.map(ObjectKey::to_string));
                     }
                     notes.push(format!(
                         "clusters for dimension {name:?} were dropped: both sides re-fabricated \
@@ -487,18 +556,31 @@ impl Manifest {
             return Err(conflicts);
         }
 
+        let mut manifest = Manifest {
+            format_version: ours.format_version,
+            hash_algo: ours.hash_algo.clone(),
+            config_fingerprint,
+            dimensions,
+            objects,
+            roots,
+            clusters,
+            provenance,
+        };
+
+        // A side that indexed a resource again put new entries in its table,
+        // and the other side still holds the entries of the version before.
+        // The union keeps those, although no merged root names them. An index
+        // build records only what a root or a tree names, so without this the
+        // next build takes them out, and a merge that changed nothing else
+        // leaves the manifest to be written and committed one more time.
+        let mut named = manifest.named_keys();
+        named.append(&mut reusable);
+        manifest.objects.retain(|key, _| named.contains(key));
+
         Ok(Merged {
-            manifest: Manifest {
-                format_version: ours.format_version,
-                hash_algo: ours.hash_algo.clone(),
-                config_fingerprint,
-                dimensions,
-                objects,
-                roots,
-                clusters,
-                provenance,
-            },
+            manifest,
             notes,
+            stale,
         })
     }
 }
@@ -511,6 +593,10 @@ impl Manifest {
 pub struct Merged {
     pub manifest: Manifest,
     pub notes: Vec<String>,
+    /// The resources that each side indexed again, in canonical order. The
+    /// manifest has the entry of `ours` for each, or none when `ours` deleted
+    /// the resource. An index build after the merge replaces them.
+    pub stale: Vec<String>,
 }
 
 /// Something [`Manifest::merge`] refuses to decide on the operator's behalf.
@@ -523,8 +609,6 @@ pub enum MergeConflict {
         ours: ContentHash,
         theirs: ContentHash,
     },
-    /// Both sides re-indexed the same resource into different objects.
-    Root { resource: String },
     /// Both sides changed a dimension's identity — its fingerprint, what it
     /// emits, or the levels it holds.
     Dimension { name: String },
@@ -543,10 +627,6 @@ impl std::fmt::Display for MergeConflict {
                 "object {key}: ours holds {ours}, theirs holds {theirs}; \
                  same key, different content, and union is not a valid resolution"
             ),
-            MergeConflict::Root { resource } => write!(
-                f,
-                "resource {resource:?}: both sides re-indexed it into different objects"
-            ),
             MergeConflict::Dimension { name } => {
                 write!(f, "dimension {name:?}: both sides changed its identity")
             }
@@ -559,6 +639,17 @@ impl std::fmt::Display for MergeConflict {
             }
         }
     }
+}
+
+/// Whether a git text merge left its conflict markers in these bytes.
+///
+/// [`Manifest::to_bytes`] starts every line with a brace or an indent, so a
+/// line that starts with a marker is the trace of a merge and never data.
+/// Git writes the same two markers in each conflict style.
+pub fn has_conflict_markers(bytes: &[u8]) -> bool {
+    bytes
+        .split(|&byte| byte == b'\n')
+        .any(|line| line.starts_with(b"<<<<<<<") || line.starts_with(b">>>>>>>"))
 }
 
 /// Resolve one value three ways. `None` is a conflict; `Some(None)` is a
@@ -850,25 +941,58 @@ mod tests {
         assert!(merged.manifest.object(key(b"a")).is_some());
         assert!(merged.manifest.object(key(b"b")).is_some());
         assert!(merged.notes.is_empty());
+        assert!(merged.stale.is_empty());
     }
 
     #[test]
-    fn both_sides_reindexing_one_resource_differently_conflicts() {
+    fn a_resource_that_each_side_indexed_again_keeps_our_entry_and_is_listed() {
         let mut base = manifest();
-        base.roots.insert("a.rs".to_owned(), root(b"original"));
+        for (resource, seed) in [("a.rs", b"a0".as_slice()), ("gone.rs", b"g0".as_slice())] {
+            base.roots.insert(resource.to_owned(), root(seed));
+            base.insert_object(key(seed), entry(seed, Tier::A)).unwrap();
+        }
 
         let mut ours = base.clone();
         ours.roots.insert("a.rs".to_owned(), root(b"ours"));
+        ours.insert_object(key(b"ours"), entry(b"ours", Tier::A))
+            .unwrap();
+        // Our side deleted this one, and their side changed it.
+        ours.roots.remove("gone.rs");
+
+        let mut theirs = base.clone();
+        for (resource, seed) in [
+            ("a.rs", b"theirs".as_slice()),
+            ("gone.rs", b"g-theirs".as_slice()),
+        ] {
+            theirs.roots.insert(resource.to_owned(), root(seed));
+            theirs
+                .insert_object(key(seed), entry(seed, Tier::A))
+                .unwrap();
+        }
+
+        let merged = Manifest::merge(Some(&base), &ours, &theirs).unwrap();
+        assert_eq!(merged.stale, vec!["a.rs", "gone.rs"]);
+        assert_eq!(merged.manifest.roots.get("a.rs"), Some(&root(b"ours")));
+        assert!(
+            !merged.manifest.roots.contains_key("gone.rs"),
+            "our side has no entry for it, so the merge has none"
+        );
+        // The table holds what the merged roots name, and no entry of the
+        // version that lost.
+        assert_eq!(
+            merged.manifest.objects.keys().cloned().collect::<Vec<_>>(),
+            vec![key(b"ours").to_string()]
+        );
+
+        // A resource that only one side changed is not in the list.
         let mut theirs = base.clone();
         theirs.roots.insert("a.rs".to_owned(), root(b"theirs"));
-
-        let conflicts = Manifest::merge(Some(&base), &ours, &theirs).unwrap_err();
-        assert_eq!(
-            conflicts,
-            vec![MergeConflict::Root {
-                resource: "a.rs".to_owned()
-            }]
-        );
+        theirs
+            .insert_object(key(b"theirs"), entry(b"theirs", Tier::A))
+            .unwrap();
+        let merged = Manifest::merge(Some(&base), &base, &theirs).unwrap();
+        assert!(merged.stale.is_empty());
+        assert_eq!(merged.manifest.roots.get("a.rs"), Some(&root(b"theirs")));
     }
 
     #[test]
@@ -912,6 +1036,209 @@ mod tests {
         assert_eq!(merged.manifest.dimensions["lexical"].levels, vec![0]);
         assert_eq!(merged.notes.len(), 1);
         assert!(merged.notes[0].contains("map index"), "{:?}", merged.notes);
+    }
+
+    /// Record `resource` the way an index build does: a root, and the object
+    /// that the root names.
+    fn index(manifest: &mut Manifest, resource: &str, seed: &[u8]) {
+        manifest.roots.insert(resource.to_owned(), root(seed));
+        manifest
+            .insert_object(key(seed), entry(seed, Tier::A))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_merge_holds_what_a_build_of_the_merged_resources_records() {
+        // Each side indexed one resource again, and its build took the entry
+        // of the version before out of its own table. The other side still
+        // holds that entry. A union keeps the two, no root names them, and the
+        // next build then changes the manifest of a merge that had no conflict.
+        let mut base = manifest();
+        index(&mut base, "a.rs", b"a1");
+        index(&mut base, "b.rs", b"b1");
+
+        let mut ours = manifest();
+        index(&mut ours, "a.rs", b"a2");
+        index(&mut ours, "b.rs", b"b1");
+
+        let mut theirs = manifest();
+        index(&mut theirs, "a.rs", b"a1");
+        index(&mut theirs, "b.rs", b"b2");
+
+        let mut built = manifest();
+        index(&mut built, "a.rs", b"a2");
+        index(&mut built, "b.rs", b"b2");
+
+        let merged = Manifest::merge(Some(&base), &ours, &theirs)
+            .unwrap()
+            .manifest;
+        assert!(
+            merged.object(key(b"a1")).is_none(),
+            "a.rs has a newer entry"
+        );
+        assert!(
+            merged.object(key(b"b1")).is_none(),
+            "b.rs has a newer entry"
+        );
+        assert!(merged.same_content(&built));
+    }
+
+    #[test]
+    fn an_entry_that_a_root_of_the_other_side_names_stays() {
+        // Two files with the same content use one object. One side changes
+        // `a.rs`, and the other side adds a copy of the `a.rs` of before. A
+        // three-way rule on the table would read that as "our side deleted
+        // the entry" and leave the root of the copy pointing at nothing.
+        let mut base = manifest();
+        index(&mut base, "a.rs", b"shared");
+
+        let mut ours = manifest();
+        index(&mut ours, "a.rs", b"changed");
+
+        let mut theirs = manifest();
+        index(&mut theirs, "a.rs", b"shared");
+        index(&mut theirs, "copy.rs", b"shared");
+
+        let merged = Manifest::merge(Some(&base), &ours, &theirs)
+            .unwrap()
+            .manifest;
+        assert_eq!(merged.roots["copy.rs"], root(b"shared"));
+        assert!(merged.object(key(b"shared")).is_some());
+        assert!(merged.object(key(b"changed")).is_some());
+        assert_eq!(merged.objects.len(), 2);
+    }
+
+    #[test]
+    fn the_clusters_of_a_dropped_tree_keep_their_entries() {
+        // The next build reuses a cluster that is on disk, and it compares
+        // the bytes with the hash that the manifest records. Without the
+        // entry there is no hash, and the build takes the bytes as they are.
+        let mut base = manifest();
+        base.clusters.insert("lexical".to_owned(), vec![key(b"c0")]);
+
+        let mut ours = base.clone();
+        ours.clusters.insert("lexical".to_owned(), vec![key(b"c1")]);
+        ours.insert_object(key(b"c1"), entry(b"c1", Tier::C))
+            .unwrap();
+
+        let mut theirs = base.clone();
+        theirs
+            .clusters
+            .insert("lexical".to_owned(), vec![key(b"c2")]);
+        theirs
+            .insert_object(key(b"c2"), entry(b"c2", Tier::C))
+            .unwrap();
+
+        let merged = Manifest::merge(Some(&base), &ours, &theirs)
+            .unwrap()
+            .manifest;
+        assert!(merged.clusters.is_empty());
+        assert!(merged.object(key(b"c1")).is_some());
+        assert!(merged.object(key(b"c2")).is_some());
+    }
+
+    #[test]
+    fn the_named_keys_are_those_of_the_roots_and_the_cluster_trees() {
+        let named = populated().named_keys();
+        let expected: BTreeSet<String> = [b"segments".as_slice(), b"desc", b"c1", b"c2"]
+            .into_iter()
+            .map(|seed| key(seed).to_string())
+            .collect();
+        assert_eq!(named, expected);
+    }
+
+    #[test]
+    fn the_same_content_is_every_field_but_provenance() {
+        let m = populated();
+
+        let mut later = m.clone();
+        later.provenance = Provenance {
+            map_version: "9.9.9".to_owned(),
+            generated_at: m.provenance.generated_at + 1,
+        };
+        assert!(m.same_content(&later));
+
+        let mut more = m.clone();
+        more.insert_object(key(b"new"), entry(b"new", Tier::A))
+            .unwrap();
+        assert!(!m.same_content(&more));
+
+        let mut moved = m.clone();
+        moved.roots.insert("src/lib.rs".to_owned(), root(b"other"));
+        assert!(!m.same_content(&moved));
+
+        let mut taller = m.clone();
+        taller.dimensions.get_mut("lexical").unwrap().levels = vec![0, 1];
+        assert!(!m.same_content(&taller));
+    }
+
+    /// The text of `populated()` after a git text merge stopped on its first
+    /// object entry.
+    fn with_conflict_markers(open: &str, close: &str) -> Vec<u8> {
+        let m = populated();
+        let text = String::from_utf8(m.to_bytes().unwrap()).unwrap();
+        let first = m.objects.keys().next().unwrap();
+        let mut out = String::new();
+        for line in text.lines() {
+            if line.contains(first.as_str()) {
+                out.push_str(&format!("{open}\n{line}\n=======\n{line}\n{close}\n"));
+            } else {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out.into_bytes()
+    }
+
+    #[test]
+    fn a_manifest_with_conflict_markers_says_so_and_gives_the_repair() {
+        // What `serde_json` says about this file is "key must be a string at
+        // line 7 column 1", which names neither the cause nor the way out.
+        let bytes = with_conflict_markers("<<<<<<< HEAD", ">>>>>>> develop");
+        let err = Manifest::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, Error::ConflictMarkers), "{err:?}");
+
+        let message = err.to_string();
+        for part in [
+            "conflict markers",
+            "git checkout --ours .map/manifest.json",
+            "`map index`",
+            "`git add .map`",
+        ] {
+            assert!(message.contains(part), "{part:?} is not in: {message}");
+        }
+        assert!(!message.contains('\n'), "callers quote it in a sentence");
+    }
+
+    #[test]
+    fn a_manifest_that_is_only_damaged_keeps_its_json_error() {
+        // The repair for a merge is the wrong advice for a file that was cut
+        // short, and that one still needs the position in the file.
+        let m = populated();
+        let mut bytes = m.to_bytes().unwrap();
+        bytes.truncate(bytes.len() / 2);
+        assert!(!has_conflict_markers(&bytes));
+        assert!(matches!(
+            Manifest::from_bytes(&bytes).unwrap_err(),
+            Error::Json(_)
+        ));
+    }
+
+    #[test]
+    fn conflict_markers_are_found_at_the_start_of_a_line_only() {
+        assert!(!has_conflict_markers(&populated().to_bytes().unwrap()));
+        // A checkout on Windows gives the file CRLF line ends.
+        let crlf = String::from_utf8(with_conflict_markers("<<<<<<< HEAD", ">>>>>>> x"))
+            .unwrap()
+            .replace('\n', "\r\n");
+        assert!(has_conflict_markers(crlf.as_bytes()));
+        // A resource can have a name that holds a marker. It is inside a
+        // JSON string then, after the indent of its line.
+        let mut m = populated();
+        m.roots.insert("<<<<<<< odd name".to_owned(), root(b"odd"));
+        let bytes = m.to_bytes().unwrap();
+        assert!(!has_conflict_markers(&bytes));
+        assert_eq!(Manifest::from_bytes(&bytes).unwrap(), m);
     }
 
     #[test]
@@ -968,15 +1295,15 @@ mod tests {
 
     #[test]
     fn every_conflict_is_reported_not_just_the_first() {
-        let mut base = manifest();
-        base.roots.insert("a.rs".to_owned(), root(b"original"));
-        base.roots.insert("b.rs".to_owned(), root(b"original"));
+        let base = manifest();
 
         let mut ours = base.clone();
         let mut theirs = base.clone();
         for (side, seed) in [(&mut ours, b"ours"), (&mut theirs, b"thrs")] {
-            side.roots.insert("a.rs".to_owned(), root(seed));
-            side.roots.insert("b.rs".to_owned(), root(seed));
+            for contested in [b"k1", b"k2"] {
+                side.insert_object(key(contested), entry(seed, Tier::C))
+                    .unwrap();
+            }
             side.config_fingerprint = Fingerprint::of(seed);
         }
 

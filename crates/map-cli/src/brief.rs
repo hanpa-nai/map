@@ -44,6 +44,9 @@ pub(crate) enum State {
     Stale(String),
     /// No snapshot to compare against: a fresh clone, or a cleared cache.
     Unknown,
+    /// A git text merge stopped in the manifest and left its markers there.
+    /// No search runs until somebody completes that merge.
+    Conflict,
 }
 
 /// Everything the briefing states, gathered before any text is built so the
@@ -69,7 +72,8 @@ pub(crate) fn run(path: &Path) -> Result<Option<String>, String> {
     // `~/.map/config.toml` (standing roots) carries that name without being an
     // index. Only an index has a manifest, so without one this is "no index
     // here" rather than a parse error in every directory under that home.
-    if !root.join(".map").join("manifest.json").is_file() {
+    let manifest_path = root.join(".map").join("manifest.json");
+    if !manifest_path.is_file() {
         return Ok(None);
     }
     let config_path = root.join(".map").join("config.toml");
@@ -77,9 +81,16 @@ pub(crate) fn run(path: &Path) -> Result<Option<String>, String> {
         .map_err(|e| format!("cannot read {}: {e}", config_path.display()))?;
     let config = Config::parse(&text).map_err(|e| e.to_string())?;
 
+    // Looked at before the drift: the drift check reads a manifest with
+    // markers as "index replaced", and the advice for a stale index is `-u`,
+    // which stops on this file. A scan of the bytes and no parse, because
+    // this runs at the start of every session.
+    let conflict = std::fs::read(&manifest_path)
+        .is_ok_and(|bytes| map_format::manifest::has_conflict_markers(&bytes));
     // Best-effort, exactly as on the query path: failing to compute drift must
     // not turn a readable index into an error.
     let state = match map_index::stale(&root) {
+        _ if conflict => State::Conflict,
         Ok(Some(report)) if report.is_stale() => State::Stale(report.to_string()),
         Ok(Some(_)) => State::Current,
         _ => State::Unknown,
@@ -224,6 +235,14 @@ pub(crate) fn render(facts: &Facts) -> String {
         State::Unknown => line(
             "Index: MAP cannot tell if the index is stale, because this clone has no snapshot.",
         ),
+        // The commands are the ones that the error of `map find` gives. Said
+        // here too, with a condition: the merge belongs to whoever started
+        // it, and a model that completes somebody's merge to get a search to
+        // run has done more than it was asked.
+        State::Conflict => {
+            line("Index: not usable. A git merge stopped in `.map/manifest.json`, and that file has conflict markers. `map find` stops with an error until the repair.");
+            line("Repair: if the merge is your task, resolve the conflicts in the other files first. Then run `git checkout --ours .map/manifest.json`, `map index`, and `git add .map`. If the merge is not your task, tell the user.");
+        }
     }
 
     let paid: Vec<String> = facts
@@ -246,7 +265,9 @@ pub(crate) fn render(facts: &Facts) -> String {
             "Update: this binary cannot update this index, because it cannot run a stage of these dimensions: {}. Do not use `--degraded allow`.",
             unavailable.join(", ")
         ));
-    } else {
+    } else if facts.state != State::Conflict {
+        // Not with a conflict: `-u` stops on the manifest, and the repair
+        // line above is the whole advice.
         line("Update: `map find -u` has no cost for this index. Use `-u` on the first search after you change files. Do not use `--degraded allow`.");
     }
     out
@@ -443,6 +464,44 @@ path = \"C:/nowhere\"
                 dimension.description.chars().count()
             );
         }
+    }
+
+    #[test]
+    fn a_manifest_with_conflict_markers_gets_the_repair_and_no_update_advice() {
+        // The drift check calls this index "stale", and the advice for a
+        // stale index is `-u`. That command stops on the markers.
+        let dir = TempDir::new("conflict");
+        crate::init::run(&dir.0, false).unwrap();
+        let path = dir.0.join(".map").join("manifest.json");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let line = text.lines().find(|l| l.contains("\"provenance\"")).unwrap();
+        let marked = text.replacen(
+            line,
+            &format!("<<<<<<< HEAD\n{line}\n=======\n{line}\n>>>>>>> develop"),
+            1,
+        );
+        std::fs::write(&path, marked).unwrap();
+
+        let text = run(&dir.0).unwrap().expect("the index is still there");
+        assert!(text.contains("Index: not usable."), "{text}");
+        assert!(text.contains(
+            "run `git checkout --ours .map/manifest.json`, `map index`, and `git add .map`"
+        ));
+        assert!(!text.contains("Index: stale"), "{text}");
+        assert!(!text.contains("has no cost"), "{text}");
+    }
+
+    #[test]
+    fn a_conflict_in_an_index_with_an_llm_dimension_keeps_the_cost_notice() {
+        // The repair runs `map index`, and that command spends money here.
+        let mut paid = dimension("descriptive", "a description");
+        paid.calls_llm = true;
+        let mut facts = facts_with(vec![dimension("lexical", "words"), paid]);
+        facts.state = State::Conflict;
+        let text = render(&facts);
+
+        assert!(text.contains("Repair: if the merge is your task"));
+        assert!(text.contains("do not use `-u` or `map index` unless the user gives approval"));
     }
 
     #[test]

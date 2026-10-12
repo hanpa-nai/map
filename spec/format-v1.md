@@ -219,8 +219,11 @@ The manifest MUST contain:
 
 A producer MUST write each of these fields with one entry on each line and the
 keys in sorted sequence: `dimensions`, `objects`, `roots`, `clusters`. Each
-entry is on a different line. Thus a text merge can merge two edits that have
-no overlap (§9.5), and a review diff shows only the entries that changed.
+entry is on a different line. Thus a review diff shows only the entries that
+changed. This layout does not make a text merge sufficient (§9.5).
+
+A producer writes an object entry only for an object that a root or a cluster
+tree uses.
 
 The manifest contains no other data. A producer can add an optional field at a
 subsequent time, and a reader that does not know the field continues to
@@ -232,8 +235,12 @@ endpoint, model, and key are in the user configuration, which is not in the
 index.
 
 The determinism digest includes the object set and the built levels. It does
-not include provenance, because provenance changes on each run and the index
-content does not.
+not include provenance, because provenance contains a timestamp.
+
+A producer SHOULD NOT write the manifest when a run changes no other field of
+it. Provenance then identifies the run that last changed the index. If each
+run writes a new timestamp, each run changes a committed file. Two branches
+that each did a build are then in conflict on the provenance line.
 
 **When an index build stops before the end, the index on disk MUST NOT have a
 manifest that describes only part of it.** A producer writes the manifest one
@@ -352,8 +359,8 @@ reads.** Descriptors and cluster labels go into the model context as search
 results. Thus a dangerous descriptor is a prompt-injection payload that stays
 in the repository.
 
-- `.gitattributes` uses **only** `linguist-generated=true`. It does not use
-  `-diff`. It must be possible for a reviewer to read index changes. The
+- `.gitattributes` marks the index with `linguist-generated=true`. It does not
+  use `-diff`. It must be possible for a reviewer to read index changes. The
   purpose: a diff view shows the index diff closed, and a reviewer can open it.
 - Review gives protection to the payloads that a model writes. A producer stores
   descriptors and cluster labels as text, and it MUST be possible to read them
@@ -469,17 +476,33 @@ three-way merge. A text merge is not sufficient. Object keys are
 input-addressed (§4). A line merge cannot see the difference between a correct
 union of object tables and a collision of one key with different bytes.
 
-A merge MUST use the union of the object tables, because usually each side adds
-different objects. A merge MUST reject a key that has a different content hash
-on each side. It MUST NOT select one side, and it MUST NOT replace an entry
-without an error. Roots and dimension identities merge three-way, one key at a
-time.
+Roots and dimension identities merge three-way, one key at a time.
+
+A merge MUST get the object entries from the union of the two object tables.
+Usually each side adds different objects. The merge MUST keep each entry that
+a root or a cluster tree of the merged manifest uses. It SHOULD remove an
+entry that none of them uses. A merge that removes those entries gives the
+object table that a producer writes for the merged resources (§5). Thus a
+subsequent index build does not change the manifest.
+
+A merge MUST reject a key that has a different content hash on each side. It
+MUST NOT select one side, and it MUST NOT replace an entry without an error.
+
+When each side changed the same resource, each manifest has a different root
+for it, and no root describes the merged resource. A merge cannot build that
+root, because it has only the manifests. It SHOULD keep the root of one side,
+and it MUST tell the caller the name of the resource. It MUST NOT keep a root
+without a report. The root that stays is that of a previous version of the
+resource, which is the usual condition of an index before an update (§10). An
+index build of the merged resources replaces it.
 
 A merge MAY remove the cluster tree of a dimension when each side made a new
 tree independently. Then no tree describes the merged object set, and there is
-no rule to select one tree. The cluster objects stay on disk. Thus a subsequent
-index build uses each subtree that did not change. A merge that removes a tree
-MUST decrease the recorded levels of that dimension to the levels that stay.
+no rule to select one tree. The cluster objects stay on disk, and the merge
+SHOULD keep their entries in the object table. Thus a subsequent index build
+uses each subtree that did not change. It compares the bytes of each subtree
+with the recorded hash (§4). A merge that removes a tree MUST decrease the
+recorded levels of that dimension to the levels that stay.
 
 ## 10. Freshness
 
