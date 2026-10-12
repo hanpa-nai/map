@@ -17,7 +17,15 @@ use crate::error::{Error, Result};
 use crate::hash::{ContentHash, Digest, Fingerprint, ObjectKey, HASH_ALGO};
 
 /// Current manifest schema version.
-pub const MANIFEST_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 2;
+
+/// The layout before: one object table for the whole index, sorted by key.
+///
+/// Still read, so an index that an earlier version made opens. Still written
+/// for a manifest that was read in it, so a merge by this build does not hand
+/// a team on the earlier version a file that their binary refuses. An index
+/// build writes [`MANIFEST_VERSION`].
+const TABLE_LAYOUT: u32 = 1;
 
 /// Which determinism guarantee an object falls under (spec §6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -109,7 +117,14 @@ pub struct Provenance {
     /// The version of the run that last changed the index. A later run that
     /// finds nothing to change leaves the two fields as they are.
     pub map_version: String,
-    /// Unix seconds, of that same run.
+    /// Unix seconds, of that same run. Only the table layout has it, and it
+    /// reads as 0 from a manifest of this version.
+    ///
+    /// Not written any more because of what it did to a merge: two branches
+    /// that each changed the index wrote two times, so the line was a conflict
+    /// in every text merge, and a git server has no other kind. The commit
+    /// that holds the manifest already says when.
+    #[serde(default)]
     pub generated_at: u64,
 }
 
@@ -270,23 +285,26 @@ impl Manifest {
         Ok(ContentHash::of(&canonical_json(&view)?).0)
     }
 
-    /// Serialize canonically, one entry per line.
+    /// Serialize canonically, one resource per line.
     ///
     /// Still exactly one byte string per manifest — sorted map keys,
     /// declaration-ordered struct fields, compact values — so Tier A holds.
-    /// What changes is the layout: every top-level key, and every entry of
-    /// `dimensions`, `objects`, `roots` and `clusters`, gets its own line.
     ///
-    /// Why: emitted as one line, a ripgrep-sized manifest is 265 KB of text
-    /// that git can only treat as a single atom, and the review diff says
-    /// nothing beyond "it changed". One entry per line makes the diff name the
-    /// objects that actually moved.
+    /// The layout is chosen for what git does with it. A resource is one line:
+    /// its root, and the entries of the objects that the root names. So a
+    /// change to one resource is a change to one line, and a review diff names
+    /// the resources that moved. An empty line stands between two resources,
+    /// because git merges two changes that have an unchanged line between
+    /// them and stops for two changes on adjacent lines.
     ///
-    /// It does not make a text merge of two index builds resolve. The object
-    /// table is sorted by key, so the entries that two sides changed land on
-    /// adjacent lines often enough to conflict, and the provenance line
-    /// conflicts whenever both sides wrote one. [`Manifest::merge`] is what
-    /// resolves a merge.
+    /// Measured on a repository of 1,259 resources, with the table layout of
+    /// before: two branches with no file in common gave 8 conflicts in a text
+    /// merge, because the table is sorted by key and each change lands at a
+    /// random place in it. In this layout the same merge has none, and the
+    /// result is the manifest that an index build of the merged files writes.
+    ///
+    /// A resource that both sides changed is still one line with two
+    /// versions, which no text merge resolves. [`Manifest::merge`] does.
     ///
     /// [`Manifest::from_bytes`] needs no change — this is ordinary JSON — and
     /// neither does [`Manifest::determinism_digest`], which hashes its own
@@ -327,6 +345,95 @@ impl Manifest {
             Ok(())
         }
 
+        /// A root with the entries of the objects it names.
+        #[derive(Serialize)]
+        struct RootLine<'a> {
+            segments: &'a ObjectKey,
+            descriptors: &'a BTreeMap<String, ObjectKey>,
+            #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+            tensors: &'a BTreeMap<String, ObjectKey>,
+            objects: BTreeMap<String, &'a ObjectEntry>,
+        }
+        #[derive(Serialize)]
+        struct ProvenanceLine<'a> {
+            map_version: &'a str,
+            /// Always 0. A binary of the layout before reads the whole
+            /// document before it looks at `format_version`, and it wants
+            /// this field. Without it that binary reports a JSON error and
+            /// says to delete the manifest; with it, it says that the index
+            /// is of a newer version and names the upgrade. A constant is on
+            /// each side of a merge, so it is never a conflict.
+            generated_at: u64,
+        }
+
+        if self.format_version > TABLE_LAYOUT {
+            let mut in_a_root: BTreeSet<String> = BTreeSet::new();
+            let mut lines = Vec::with_capacity(self.roots.len());
+            for (resource, root) in &self.roots {
+                let mut objects = BTreeMap::new();
+                let keys = std::iter::once(&root.segments)
+                    .chain(root.descriptors.values())
+                    .chain(root.tensors.values());
+                for key in keys {
+                    let hex = key.to_string();
+                    if let Some(entry) = self.objects.get(&hex) {
+                        objects.insert(hex.clone(), entry);
+                    }
+                    in_a_root.insert(hex);
+                }
+                let line = RootLine {
+                    segments: &root.segments,
+                    descriptors: &root.descriptors,
+                    tensors: &root.tensors,
+                    objects,
+                };
+                lines.push((resource, canonical_json(&line)?));
+            }
+            let rest: BTreeMap<String, &ObjectEntry> = self
+                .objects
+                .iter()
+                .filter(|(key, _)| !in_a_root.contains(*key))
+                .map(|(key, entry)| (key.clone(), entry))
+                .collect();
+
+            let mut out = Vec::new();
+            out.extend_from_slice(b"{\n");
+            scalar(&mut out, "format_version", &self.format_version)?;
+            out.extend_from_slice(b",\n");
+            scalar(&mut out, "hash_algo", &self.hash_algo)?;
+            out.extend_from_slice(b",\n");
+            scalar(&mut out, "config_fingerprint", &self.config_fingerprint)?;
+            out.extend_from_slice(b",\n");
+            block(&mut out, "dimensions", &self.dimensions)?;
+            out.extend_from_slice(b",\n");
+            block(&mut out, "objects", &rest)?;
+            out.extend_from_slice(b",\n");
+            if !self.clusters.is_empty() {
+                block(&mut out, "clusters", &self.clusters)?;
+                out.extend_from_slice(b",\n");
+            }
+            let provenance = ProvenanceLine {
+                map_version: &self.provenance.map_version,
+                generated_at: 0,
+            };
+            scalar(&mut out, "provenance", &provenance)?;
+            out.extend_from_slice(b",\n");
+            // Last, and with an empty line between two resources. Git merges
+            // two changes that have one line between them that did not
+            // change, and stops for two changes on adjacent lines. Measured:
+            // 2 conflicts with no empty line, 1 with it, for the same merge.
+            out.extend_from_slice(b"  \"roots\": {\n");
+            for (i, (resource, line)) in lines.iter().enumerate() {
+                out.extend_from_slice(if i > 0 { b",\n\n" } else { b"\n" });
+                out.extend_from_slice(b"    ");
+                out.extend_from_slice(&canonical_json(resource)?);
+                out.extend_from_slice(b": ");
+                out.extend_from_slice(line);
+            }
+            out.extend_from_slice(b"\n\n  }\n}\n");
+            return Ok(out);
+        }
+
         // Key order mirrors the struct's declaration order, so the hand-written
         // writer and the derived `Serialize` describe the same document.
         let mut out = Vec::new();
@@ -359,8 +466,32 @@ impl Manifest {
     /// newer index — reading fields that moved and ignoring ones it does not
     /// know — instead of saying "this index needs a newer map".
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let manifest: Manifest = match serde_json::from_slice(bytes) {
-            Ok(manifest) => manifest,
+        /// The two layouts in one shape: a root can have the entries of its
+        /// objects, and the table has all entries or only those of no root.
+        #[derive(Deserialize)]
+        struct RootText {
+            #[serde(flatten)]
+            root: ResourceRoot,
+            #[serde(default)]
+            objects: BTreeMap<String, ObjectEntry>,
+        }
+        #[derive(Deserialize)]
+        struct ManifestText {
+            format_version: u32,
+            hash_algo: String,
+            config_fingerprint: Fingerprint,
+            dimensions: BTreeMap<String, DimensionIdentity>,
+            #[serde(default)]
+            objects: BTreeMap<String, ObjectEntry>,
+            #[serde(default)]
+            roots: BTreeMap<String, RootText>,
+            #[serde(default)]
+            clusters: BTreeMap<String, Vec<ObjectKey>>,
+            provenance: Provenance,
+        }
+
+        let text: ManifestText = match serde_json::from_slice(bytes) {
+            Ok(text) => text,
             // Looked for only after the parse fails, so a manifest that reads
             // pays nothing for it. Markers are never valid JSON, so nothing
             // that parses can hold them.
@@ -368,12 +499,44 @@ impl Manifest {
             Err(e) => return Err(e.into()),
         };
 
-        if manifest.format_version != MANIFEST_VERSION {
+        if text.format_version != MANIFEST_VERSION && text.format_version != TABLE_LAYOUT {
             return Err(Error::UnsupportedVersion {
                 kind: "manifest",
-                found: manifest.format_version,
+                found: text.format_version,
                 expected: MANIFEST_VERSION,
             });
+        }
+
+        let mut manifest = Manifest {
+            format_version: text.format_version,
+            hash_algo: text.hash_algo,
+            config_fingerprint: text.config_fingerprint,
+            dimensions: text.dimensions,
+            objects: text.objects,
+            roots: BTreeMap::new(),
+            clusters: text.clusters,
+            provenance: text.provenance,
+        };
+        for (resource, line) in text.roots {
+            for (key, entry) in line.objects {
+                // Two files with one content name one object, so one key can
+                // be on two lines. Two contents for it is the collision that
+                // the table refuses.
+                match manifest.objects.get(&key) {
+                    Some(existing) if existing.content_hash != entry.content_hash => {
+                        return Err(Error::KeyCollision {
+                            key,
+                            a: existing.content_hash.to_string(),
+                            b: entry.content_hash.to_string(),
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        manifest.objects.insert(key, entry);
+                    }
+                }
+            }
+            manifest.roots.insert(resource, line.root);
         }
         if manifest.hash_algo != HASH_ALGO {
             return Err(Error::UnsupportedHashAlgo {
@@ -419,9 +582,14 @@ impl Manifest {
 
         // Not three-way: a manifest this build cannot read on one side is not
         // something to resolve field by field.
-        if ours.format_version != theirs.format_version || ours.hash_algo != theirs.hash_algo {
+        if ours.hash_algo != theirs.hash_algo {
             conflicts.push(MergeConflict::Format);
         }
+        // Both sides were read, so both are layouts that this build knows, and
+        // they hold the same fields. A branch that an index build moved to the
+        // new layout merges with one that it did not, and the result is in the
+        // newer of the two.
+        let format_version = ours.format_version.max(theirs.format_version);
 
         let config_fingerprint = match three_way(
             base.map(|b| &b.config_fingerprint),
@@ -544,9 +712,12 @@ impl Manifest {
             }
         }
 
-        // Tier C and wall-clock; the later run is the one that describes the
-        // objects, and its version is what produced them.
-        let provenance = if theirs.provenance.generated_at > ours.provenance.generated_at {
+        // The side in the newer layout is the newer producer, and the result
+        // is in its layout. Between two sides in the table layout, the later
+        // run is the one that describes the objects. `ours` when nothing
+        // tells them apart.
+        let newer = |m: &Manifest| (m.format_version, m.provenance.generated_at);
+        let provenance = if newer(theirs) > newer(ours) {
             theirs.provenance.clone()
         } else {
             ours.provenance.clone()
@@ -557,7 +728,7 @@ impl Manifest {
         }
 
         let mut manifest = Manifest {
-            format_version: ours.format_version,
+            format_version,
             hash_algo: ours.hash_algo.clone(),
             config_fingerprint,
             dimensions,
@@ -614,8 +785,7 @@ pub enum MergeConflict {
     Dimension { name: String },
     /// Both sides built from a different `config.toml`.
     ConfigFingerprint,
-    /// Different format versions or hash algorithms; not a field-by-field
-    /// question.
+    /// Different hash algorithms; not a field-by-field question.
     Format,
 }
 
@@ -635,7 +805,7 @@ impl std::fmt::Display for MergeConflict {
                  then re-index",
             ),
             MergeConflict::Format => {
-                f.write_str("the two manifests disagree on format version or hash algorithm")
+                f.write_str("the two manifests disagree on the hash algorithm")
             }
         }
     }
@@ -704,10 +874,22 @@ mod tests {
         ObjectKey::derive(&[seed], Fingerprint::of(b"cfg"))
     }
 
+    /// What a manifest reads back as. The time of the run is not written.
+    fn as_written(m: &Manifest) -> Manifest {
+        let mut written = m.clone();
+        if written.format_version > TABLE_LAYOUT {
+            written.provenance.generated_at = 0;
+        }
+        written
+    }
+
     #[test]
     fn roundtrips_through_json() {
         let m = manifest();
-        assert_eq!(Manifest::from_bytes(&m.to_bytes().unwrap()).unwrap(), m);
+        assert_eq!(
+            Manifest::from_bytes(&m.to_bytes().unwrap()).unwrap(),
+            as_written(&m)
+        );
     }
 
     #[test]
@@ -875,7 +1057,177 @@ mod tests {
     #[test]
     fn the_line_oriented_layout_still_parses() {
         let m = populated();
-        assert_eq!(Manifest::from_bytes(&m.to_bytes().unwrap()).unwrap(), m);
+        assert_eq!(
+            Manifest::from_bytes(&m.to_bytes().unwrap()).unwrap(),
+            as_written(&m)
+        );
+    }
+
+    /// Resources whose objects have entries, as an index build records them,
+    /// and one cluster object that no root names.
+    fn indexed(resources: &[(&str, &[u8])]) -> Manifest {
+        let mut m = manifest();
+        for (resource, seed) in resources {
+            let segments = key(&[seed, b"/segments".as_slice()].concat());
+            let descriptor = key(&[seed, b"/descriptor".as_slice()].concat());
+            for k in [segments, descriptor] {
+                m.insert_object(k, entry(seed, Tier::A)).unwrap();
+            }
+            m.roots.insert(
+                (*resource).to_owned(),
+                ResourceRoot {
+                    segments,
+                    descriptors: BTreeMap::from([("structural".to_owned(), descriptor)]),
+                    tensors: BTreeMap::new(),
+                },
+            );
+        }
+        m.insert_object(key(b"cluster"), entry(b"cluster", Tier::C))
+            .unwrap();
+        m.clusters
+            .insert("lexical".to_owned(), vec![key(b"cluster")]);
+        m
+    }
+
+    fn text_of(m: &Manifest) -> String {
+        String::from_utf8(m.to_bytes().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_resource_is_one_line_with_the_entries_of_its_objects() {
+        let m = indexed(&[("a.rs", b"a"), ("b.rs", b"b")]);
+        let text = text_of(&m);
+        let lines: Vec<&str> = text.lines().collect();
+
+        for (resource, root) in &m.roots {
+            let at = lines
+                .iter()
+                .position(|l| l.starts_with(&format!("    \"{resource}\": ")))
+                .expect("the resource has a line");
+            for k in [root.segments, root.descriptors["structural"]] {
+                let k = k.to_string();
+                // Once as the key that the root names, and once as the key of
+                // the entry. On no other line: the table does not repeat it.
+                assert_eq!(lines[at].matches(&k).count(), 2, "{resource}");
+                assert_eq!(text.matches(&k).count(), 2, "{resource}");
+            }
+            // An empty line on each side is what lets git merge a change to
+            // this resource with a change to the next one.
+            assert_eq!(lines[at - 1], "", "before {resource}");
+            assert_eq!(lines[at + 1], "", "after {resource}");
+        }
+
+        // The entry that no root names stays in the table.
+        let cluster = key(b"cluster").to_string();
+        let table = text.split("\"roots\"").next().unwrap();
+        assert!(table.contains(&format!("    \"{cluster}\": {{\"content_hash\"")));
+
+        // A time in the file is a line that each side of a merge changes. The
+        // field stays, as a constant, for a reader of the layout before.
+        assert_ne!(m.provenance.generated_at, 0);
+        assert!(text.contains("\"provenance\": {\"map_version\":\"0.0.0\",\"generated_at\":0}"));
+        assert!(!text.contains('\r'), "line endings must be LF");
+        assert!(text.ends_with("}\n"), "must end with a trailing newline");
+        assert_eq!(
+            Manifest::from_bytes(text.as_bytes()).unwrap(),
+            as_written(&m)
+        );
+    }
+
+    #[test]
+    fn a_change_to_one_resource_changes_one_line() {
+        // What makes two branches merge as text: each touches only the lines
+        // of the resources that it changed.
+        let before = indexed(&[("a.rs", b"a"), ("b.rs", b"b"), ("c.rs", b"c")]);
+        let after = indexed(&[("a.rs", b"a"), ("b.rs", b"b2"), ("c.rs", b"c")]);
+        let (before, after) = (text_of(&before), text_of(&after));
+        let (before, after): (Vec<&str>, Vec<&str>) =
+            (before.lines().collect(), after.lines().collect());
+
+        assert_eq!(before.len(), after.len());
+        let changed: Vec<usize> = (0..before.len())
+            .filter(|&i| before[i] != after[i])
+            .collect();
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        assert!(before[changed[0]].starts_with("    \"b.rs\": "));
+    }
+
+    #[test]
+    fn the_table_layout_reads_and_is_written_back_byte_for_byte() {
+        // An index of an earlier version. A merge by this build must not turn
+        // it into a file that the binary of a team mate refuses.
+        let mut m = indexed(&[("a.rs", b"a"), ("b.rs", b"b")]);
+        m.format_version = TABLE_LAYOUT;
+        let text = text_of(&m);
+
+        assert!(text.contains("\"format_version\": 1,"));
+        assert!(text.contains("\"generated_at\":1700000000"));
+        // One table with each entry, and a root with no entries of its own.
+        let table = text.split("\"roots\"").next().unwrap();
+        for k in m.objects.keys() {
+            assert_eq!(text.matches(k.as_str()).count(), 2, "{k}");
+            assert!(table.contains(&format!("    \"{k}\": {{\"content_hash\"")));
+        }
+
+        let read = Manifest::from_bytes(text.as_bytes()).unwrap();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes().unwrap(), text.as_bytes());
+    }
+
+    #[test]
+    fn one_key_with_two_contents_on_two_lines_is_refused() {
+        // Two files with one content name one object, so its entry is on the
+        // lines of the two resources. A text merge can leave the two lines
+        // with different bytes for it.
+        let mut m = indexed(&[("a.rs", b"same"), ("b.rs", b"other")]);
+        let shared = m.roots["a.rs"].clone();
+        m.roots.insert("b.rs".to_owned(), shared);
+        let named = m.named_keys();
+        m.objects.retain(|k, _| named.contains(k));
+        let text = text_of(&m);
+        assert_eq!(
+            Manifest::from_bytes(text.as_bytes()).unwrap().objects,
+            m.objects
+        );
+
+        let hash = entry(b"same", Tier::A).content_hash.to_string();
+        let forged = entry(b"forged", Tier::A).content_hash.to_string();
+        let at = text.find("    \"b.rs\": ").unwrap();
+        let text = format!("{}{}", &text[..at], text[at..].replacen(&hash, &forged, 1));
+        assert!(matches!(
+            Manifest::from_bytes(text.as_bytes()),
+            Err(Error::KeyCollision { .. })
+        ));
+    }
+
+    #[test]
+    fn a_merge_of_the_two_layouts_is_in_the_new_layout() {
+        // One branch ran an index build with this version, and one did not.
+        let mut base = indexed(&[("shared.rs", b"shared")]);
+        base.format_version = TABLE_LAYOUT;
+        let mut ours = indexed(&[("shared.rs", b"shared"), ("ours.rs", b"ours")]);
+        ours.format_version = TABLE_LAYOUT;
+        let theirs = indexed(&[("shared.rs", b"shared"), ("theirs.rs", b"theirs")]);
+
+        // The table layout has a time, and the new one reads as 0. The time
+        // must not make the older producer the one that the result names.
+        ours.provenance.map_version = "0.0.5".to_owned();
+        let mut theirs = theirs;
+        theirs.provenance.map_version = "0.0.6".to_owned();
+        theirs.provenance.generated_at = 0;
+
+        for (a, b) in [(&ours, &theirs), (&theirs, &ours)] {
+            let merged = Manifest::merge(Some(&base), a, b).unwrap().manifest;
+            assert_eq!(merged.format_version, MANIFEST_VERSION);
+            assert_eq!(merged.provenance.map_version, "0.0.6");
+            assert_eq!(
+                merged.roots.keys().collect::<Vec<_>>(),
+                vec!["ours.rs", "shared.rs", "theirs.rs"]
+            );
+        }
+        // Two sides in the table layout stay in it.
+        let merged = Manifest::merge(Some(&base), &ours, &base).unwrap().manifest;
+        assert_eq!(merged.format_version, TABLE_LAYOUT);
     }
 
     #[test]
@@ -1238,7 +1590,7 @@ mod tests {
         m.roots.insert("<<<<<<< odd name".to_owned(), root(b"odd"));
         let bytes = m.to_bytes().unwrap();
         assert!(!has_conflict_markers(&bytes));
-        assert_eq!(Manifest::from_bytes(&bytes).unwrap(), m);
+        assert_eq!(Manifest::from_bytes(&bytes).unwrap(), as_written(&m));
     }
 
     #[test]

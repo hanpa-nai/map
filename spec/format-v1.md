@@ -215,15 +215,42 @@ The manifest MUST contain:
 - **the levels that the producer built** for each dimension. With this data, a
   consumer knows which levels the index contains and which levels are only in
   the configuration.
-- **provenance**: the version of the producer implementation and a timestamp
+- **provenance**: the version of the producer implementation
+- **`format_version`**: the number of the manifest layout. This section gives
+  the rules for layout 2.
 
-A producer MUST write each of these fields with one entry on each line and the
-keys in sorted sequence: `dimensions`, `objects`, `roots`, `clusters`. Each
-entry is on a different line. Thus a review diff shows only the entries that
-changed. This layout does not make a text merge sufficient (§9.5).
+A producer MUST write the manifest as JSON with LF line ends, the keys in
+sorted sequence, and this layout:
+
+- `dimensions`, `objects`, and `clusters` have one entry on each line.
+- `roots` is the last field, and it has one line for each resource. That line
+  contains the root of the resource and, in an `objects` field, the entry of
+  each object that the root names.
+- An empty line is before and after each resource line.
+- The `objects` field of the manifest contains only the entries that no root
+  names. Those are the entries of cluster objects.
+
+The purpose of the layout is a text merge. A change to one resource changes
+one line. Git merges two changes that have a line between them that did not
+change, and it stops for two changes on adjacent lines. Thus two branches that
+changed different resources merge as text, and the result is the manifest that
+a producer writes for the merged resources. A review diff shows one line for
+each resource that changed.
+
+An object that two resources use has its entry on the line of each resource. A
+reader MUST reject a manifest in which one key has a different content hash on
+two lines (§4).
+
+A text merge does not resolve a resource that each side changed (§9.5).
 
 A producer writes an object entry only for an object that a root or a cluster
 tree uses.
+
+**Layout 1.** A manifest with `format_version` 1 has all object entries in the
+`objects` field, a root with no `objects` field, and a `generated_at` time in
+provenance. A reader MUST read layout 1. A producer that builds an index MUST
+write layout 2. A merge of two manifests in layout 1 SHOULD write layout 1.
+A merge of the two layouts MUST write layout 2.
 
 The manifest contains no other data. A producer can add an optional field at a
 subsequent time, and a reader that does not know the field continues to
@@ -235,12 +262,18 @@ endpoint, model, and key are in the user configuration, which is not in the
 index.
 
 The determinism digest includes the object set and the built levels. It does
-not include provenance, because provenance contains a timestamp.
+not include provenance.
 
 A producer SHOULD NOT write the manifest when a run changes no other field of
-it. Provenance then identifies the run that last changed the index. If each
-run writes a new timestamp, each run changes a committed file. Two branches
-that each did a build are then in conflict on the provenance line.
+it. Provenance then identifies the version that last changed the index, and an
+upgrade of the producer does not change a committed file.
+
+Provenance MUST NOT contain a time. Two branches that each did a build write
+two different times, and that line is then a conflict in each text merge. The
+commit that contains the manifest records the time. Provenance has a
+`generated_at` field, and a producer MUST write 0 in it. A reader of layout 1
+reads the full manifest before it examines `format_version`, and it must find
+this field to report the correct error.
 
 **When an index build stops before the end, the index on disk MUST NOT have a
 manifest that describes only part of it.** A producer writes the manifest one
@@ -471,10 +504,13 @@ checkouts. It stays in the git history, and each clone continues to fetch it.
 
 ### 9.5 Merge
 
-An implementation MUST resolve two manifests that have the same ancestor with a
-three-way merge. A text merge is not sufficient. Object keys are
-input-addressed (§4). A line merge cannot see the difference between a correct
-union of object tables and a collision of one key with different bytes.
+A text merge of two manifests in layout 2 is correct when the two sides
+changed different resources (§5). A git server does this merge. A reader
+detects the collision of one key with different bytes after such a merge (§5).
+
+An implementation MUST also supply a three-way merge of two manifests that
+have the same ancestor. A text merge does not resolve a resource that each
+side changed, and it does not resolve two manifests in layout 1.
 
 Roots and dimension identities merge three-way, one key at a time.
 

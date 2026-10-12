@@ -845,7 +845,7 @@ fn stale_note(resources: &[String]) -> Option<String> {
 /// changed the configuration, or one dimension. `ours` is a whole manifest,
 /// so the build starts from it with nothing to repair first.
 ///
-/// Not for one key with two contents, and not for two formats. A build stops
+/// Not for one key with two contents, and not for two hash algorithms. A build stops
 /// on the first, and cannot read the second.
 fn repair_for(conflicts: &[map_format::manifest::MergeConflict]) -> Option<&'static str> {
     use map_format::manifest::MergeConflict;

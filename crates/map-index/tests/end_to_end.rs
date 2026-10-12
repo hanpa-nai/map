@@ -478,8 +478,33 @@ fn a_run_that_changes_nothing_leaves_the_manifest_file_as_it_is() {
     .unwrap();
     map_index::run(corpus.path()).unwrap();
     let after = manifest_of(&corpus);
-    assert!(after.provenance.generated_at > 1);
     assert_ne!(after.provenance.map_version, "0.0.0-earlier");
+}
+
+#[test]
+fn an_index_build_moves_a_manifest_of_the_layout_before_to_this_one() {
+    // An index that an earlier version made. The build after the upgrade
+    // changes no object, and it still must write the manifest: the new layout
+    // is what lets git merge two branches that changed different files.
+    let corpus = Corpus::new("layout-before");
+    map_index::run(corpus.path()).unwrap();
+    let path = corpus.path().join(".map/manifest.json");
+    let mut earlier = manifest_of(&corpus);
+    earlier.format_version = 1;
+    fs::write(&path, earlier.to_bytes().unwrap()).unwrap();
+    assert_eq!(manifest_of(&corpus).format_version, 1);
+
+    let run = map_index::run(corpus.path()).unwrap();
+    assert_eq!(run.objects_written, 0);
+    let after = manifest_of(&corpus);
+    assert_eq!(after.format_version, map_format::manifest::MANIFEST_VERSION);
+    assert_eq!(after.objects, earlier.objects);
+    assert_eq!(after.roots, earlier.roots);
+
+    // One time only: the next build finds the layout of this version.
+    let written = fs::read(&path).unwrap();
+    map_index::run(corpus.path()).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), written);
 }
 
 #[test]

@@ -195,15 +195,22 @@ in a new directory.
   4 s. Then commit `.map/`. Until you run `map index`, `map find` uses the
   objects of the previous version. `map find -u` does not build them, because
   no file of the repository changed.
-- **Each version reads an index that a different version made.** Versions
-  0.0.0 to 0.0.3 make the same objects for the same resources.
+- **Each version from 0.0.0 to 0.0.5 reads an index that a different one of
+  them made.** Versions 0.0.0 to 0.0.3 make the same objects for the same
+  resources.
 - **From version 0.0.3, `map find` shows segments that are adjacent as one
   hit**, and one file has a maximum of two hits. See
   [Search the index](#search-the-index).
+- **Run `map index` one time after an upgrade to 0.0.6 from a previous
+  version, and commit `.map/manifest.json`.** Version 0.0.6 writes the
+  manifest in a new layout, which git can merge (see
+  [Committed files](#committed-files)). The command writes no object. Version
+  0.0.6 reads an index of a previous version. A previous version does not
+  read the new layout: it stops and tells you to run `map upgrade`. Thus all
+  persons who use one repository must upgrade.
 - **From version 0.0.5, an index build that changes no entry does not write
-  `manifest.json`.** The provenance line keeps the version and the time of
-  the build that last changed the index. Thus an upgrade does not make a
-  change that you must commit.
+  `manifest.json`.** The provenance line keeps the version of the build that
+  last changed the index.
 - **From version 0.0.5, `map init` sets the line ends of `.map/` in
   `.map/.gitattributes`.** An index from a previous version does not have
   these lines, and on Windows git then gives CRLF line ends to four files of
@@ -961,11 +968,15 @@ stores the tensors of a segment as binary little-endian frames. On a new clone,
 MAP decodes these frames approximately 47 times faster than JSON. A cluster
 record keeps its tensor in its JSON record.
 
-MAP writes the manifest with one entry on each line. `dimensions`, `objects`,
-`roots`, and `clusters` each have one line for each key. The keys are in sorted
-sequence, with an indent of two spaces and LF line ends. Thus a review diff
-shows only the entries that changed. A text merge of two manifests usually
-stops with a conflict, and the merge driver is necessary (see [Merge](#merge)).
+MAP writes the manifest with one line for each resource. That line contains
+the root of the resource and the entries of its objects. An empty line is
+between two resources. The keys are in sorted sequence, with LF line ends.
+Thus a change to one file changes one line of the manifest, and a review diff
+shows one line for each file that changed.
+
+Git merges two changes that have a line between them that did not change.
+Thus two branches that changed different files merge as text, also on a git
+server (see [Merge](#merge)).
 
 Two index builds make **byte-identical** objects. A clone that searches with no
 index build gets the same hits and the same scores.
@@ -1013,7 +1024,6 @@ The driver does a three-way merge of the manifests:
   removes the tree. The cluster objects stay on disk, and their entries stay
   in the object table. The next `map index` builds the tree again and uses
   each subtree that did not change.
-- For provenance, the driver keeps the newer `generated_at`.
 
 When the two branches changed different files, the merge is automatic. A
 subsequent `map index` changes no committed file.
@@ -1050,7 +1060,7 @@ conditions:
 
 - One object key has different bytes on each side.
 - The two sides changed `config.toml`, or the identity of one dimension.
-- The two manifests have a different `format_version` or `hash_algo`.
+- The two manifests have a different `hash_algo`.
 
 The driver prints each conflict on stderr. Git then marks the manifest as a
 file with a conflict. For a change to `config.toml` or to a dimension, merge
@@ -1058,12 +1068,14 @@ file with a conflict. For a change to `config.toml` or to a dimension, merge
 
 #### A clone that has no driver
 
-A clone that did not add the driver gets the usual git text merge. When each
-branch changed the index, the text merge stops with a conflict, because each
-change to the index writes the provenance line. Git puts conflict markers in
-the manifest. Each MAP command then stops with a message that gives the
-repair, and `map brief` gives the same repair to an agent. The repair has one
-more command:
+A clone that did not add the driver gets the usual git text merge. When the
+two branches changed different files, that merge is automatic, and the result
+is the manifest that `map index` writes for the merged files.
+
+When the two branches changed the same file, the text merge stops with a
+conflict in the line of that file. Git puts conflict markers in the manifest.
+Each MAP command then stops with a message that gives the repair, and
+`map brief` gives the same repair to an agent:
 
 ```console
 $ git checkout --ours .map/manifest.json
@@ -1077,10 +1089,11 @@ builds the entries of the merged files, and it adds the driver.
 #### A merge on a git server
 
 The driver command is in the local git configuration of one clone. A git
-server does not have it. Thus a pull request can show a conflict in
-`.map/manifest.json` when its branch and the target branch each changed the
-index. To resolve it, merge the target branch into your branch on your
-machine, and push.
+server does not have it, and it does a text merge. When the branch of a pull
+request and the target branch changed different files, the server merges the
+manifest. When they changed the same file, the pull request shows a conflict
+in `.map/manifest.json`, also when the file has no conflict. To resolve it,
+merge the target branch into your branch on your machine, and push.
 
 ### Remove unreachable objects
 
