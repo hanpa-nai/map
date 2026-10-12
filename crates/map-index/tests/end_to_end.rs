@@ -1024,6 +1024,10 @@ fn an_edit_during_a_run_is_caught_by_the_next_staleness_check() {
         // Fires before the resource at `done` is read, and discovery is sorted,
         // so by the third callback geometry.rs has already been indexed. No
         // sleep and no clock resolution involved: the edit changes the length.
+        // The last report names no resource, and is not one of these.
+        if progress.resource.is_empty() {
+            return;
+        }
         done = progress.done;
         if progress.done == 2 {
             fs::write(
@@ -1042,6 +1046,29 @@ fn an_edit_during_a_run_is_caught_by_the_next_staleness_check() {
         report.changed, 1,
         "the edit landed after its file was read, so it must still be pending: {report}"
     );
+}
+
+#[test]
+fn the_last_report_of_a_run_says_that_every_resource_is_done() {
+    // The run goes on after the last resource: it writes the manifest and the
+    // packs. A caller that shows the reports would otherwise stay at a count
+    // below the total until the run returns.
+    let corpus = Corpus::new("last-report");
+    let mut reports: Vec<(usize, usize, String)> = Vec::new();
+    let stats = map_index::run_with_progress(corpus.path(), map_index::Degraded::Abort, |p| {
+        reports.push((p.done, p.total, p.resource.to_owned()));
+    })
+    .unwrap();
+
+    let (last, before) = reports.split_last().unwrap();
+    assert_eq!(*last, (stats.discovered, stats.discovered, String::new()));
+    // One report for each resource, with the resources that are done before
+    // it. The last report is the only one that names no resource.
+    assert_eq!(before.len(), stats.discovered);
+    for (position, (done, total, resource)) in before.iter().enumerate() {
+        assert_eq!((*done, *total), (position, stats.discovered));
+        assert!(!resource.is_empty());
+    }
 }
 
 #[test]

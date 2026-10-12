@@ -536,6 +536,26 @@ A run that omits a stage (`--degraded allow`) records no snapshot. Thus the
 next `-u` does the work again. It does not tell you that the tree is clean when
 the build was not full.
 
+### The status line
+
+`map index` and `map find -u` show one status line on stderr during the work:
+
+```
+  indexing  83%  197/237  348 classified
+```
+
+The line shows the number of resources that MAP completed and the total
+number. It also shows the number of classifier calls. MAP writes each new
+status in the same row of the terminal. After the last resource, the line
+shows `writing the index`. When the work is complete, MAP erases the line.
+
+MAP shows the line only when stderr is a terminal. An agent that runs `map`
+through a shell does not get it.
+
+The line has counts only, and no file name. For a repository of less than
+10,000,000 resources, it has a maximum of 52 columns. Thus it stays in one row
+of a terminal that has 53 columns or more.
+
 ### Examine classifier output
 
 For `map classify`, a binary with the `llm` feature is necessary. The command

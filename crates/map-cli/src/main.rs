@@ -478,8 +478,12 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 None if can_prompt() => map_index::Degraded::Ask(&mut ask),
                 None => map_index::Degraded::Abort,
             };
-            let stats =
-                map_index::run_with_progress(&path, policy, |_| {}).map_err(|e| e.to_string())?;
+            let mut status = ProgressLine::new("indexing", false);
+            let result = map_index::run_with_progress(&path, policy, |p| status.tick(&p));
+            // Before the `?`: an error message would otherwise start in the
+            // middle of the status line.
+            status.finish();
+            let stats = result.map_err(|e| e.to_string())?;
             let elapsed = started.elapsed();
 
             // Re-run on every index, not once at init: a clone carries
@@ -1222,10 +1226,11 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
             None => map_index::Degraded::Abort,
         };
 
-        let mut reporter = ProgressLine::new(args.quiet);
-        let updated = map_index::refresh_with_progress(&args.path, policy, |p| reporter.tick(&p))
-            .map_err(|e| e.to_string())?;
+        let mut reporter = ProgressLine::new("updating", args.quiet);
+        let updated = map_index::refresh_with_progress(&args.path, policy, |p| reporter.tick(&p));
+        // Before the `?`, for the same reason as in `map index`.
         reporter.finish();
+        let updated = updated.map_err(|e| e.to_string())?;
 
         if let Some(stats) = updated {
             if stats.objects_written > 0 && !args.quiet {
@@ -1363,26 +1368,57 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Whether this is the report that follows the last resource.
+fn is_last(progress: &map_index::Progress<'_>) -> bool {
+    progress.done == progress.total
+}
+
+/// One status line: how far the run is.
+///
+/// Counts only, and no name of a resource. A line that is wider than the
+/// terminal wraps, and a carriage return then goes back to the start of the
+/// last row only, so every redraw leaves a row behind it. This binary does
+/// not know the width of the terminal; a line of counts is 52 columns for a
+/// corpus of millions of resources, and a path can be any length.
+fn status_text(verb: &str, progress: &map_index::Progress<'_>) -> String {
+    let head = format!(
+        "  {verb} {:>3}%  {}/{}",
+        (progress.fraction() * 100.0) as u32,
+        progress.done,
+        progress.total,
+    );
+    if is_last(progress) {
+        // Every resource is done and the run is not: without a word about
+        // what is left, a full count that stays on the screen reads as a
+        // program that has stopped.
+        return format!("{head}  writing the index");
+    }
+    format!("{head}  {} classified", progress.classifier_calls)
+}
+
 /// A single self-overwriting progress line on stderr.
 ///
-/// `-u` is an explicit request, so the cost is already accepted — but accepted
-/// is not the same as visible. With a dense or LLM-backed dimension an update
-/// can run for a while and spend money, and the person who asked for it should
-/// be able to see what it is doing and press Ctrl-C if they change their mind.
+/// An index build or an update can run for a while, and with an LLM-backed
+/// dimension it spends money. Whoever asked for it should be able to see what
+/// it is doing and press Ctrl-C if they change their mind.
 ///
 /// Silent unless stderr is a terminal: an agent gets no carriage-return
 /// animation in its captured output, and a redirected stream gets no control
 /// characters.
 struct ProgressLine {
+    verb: &'static str,
     enabled: bool,
     last_drawn: std::time::Instant,
+    /// The columns of the line on the terminal, which the next one has to
+    /// cover.
     width: usize,
 }
 
 impl ProgressLine {
-    fn new(quiet: bool) -> Self {
+    fn new(verb: &'static str, quiet: bool) -> Self {
         use std::io::IsTerminal;
         ProgressLine {
+            verb,
             enabled: !quiet && std::io::stderr().is_terminal(),
             // Draw the first tick immediately rather than after the interval.
             last_drawn: std::time::Instant::now() - std::time::Duration::from_secs(1),
@@ -1391,40 +1427,45 @@ impl ProgressLine {
     }
 
     fn tick(&mut self, progress: &map_index::Progress<'_>) {
+        self.tick_to(&mut std::io::stderr(), progress);
+    }
+
+    fn tick_to(&mut self, out: &mut impl std::io::Write, progress: &map_index::Progress<'_>) {
         if !self.enabled {
             return;
         }
         // Throttle: redrawing per resource would make the terminal, not the
-        // indexer, the bottleneck on a large corpus.
-        if self.last_drawn.elapsed() < std::time::Duration::from_millis(80) {
+        // indexer, the bottleneck on a large corpus. The last report is always
+        // drawn: it stays on the screen while the index is written, and a
+        // count below the total there says that resources are still to come.
+        let now = std::time::Instant::now();
+        let recent =
+            now.saturating_duration_since(self.last_drawn) < std::time::Duration::from_millis(80);
+        if recent && !is_last(progress) {
             return;
         }
-        self.last_drawn = std::time::Instant::now();
+        self.last_drawn = now;
 
-        // Keep the tail of the path — the distinguishing part is the end.
-        let resource = progress.resource;
-        let shown = if resource.len() > 40 {
-            format!("…{}", &resource[resource.len() - 39..])
-        } else {
-            resource.to_owned()
-        };
-
-        let line = format!(
-            "  updating {:>3}%  {}/{}  {} classified  {}",
-            (progress.fraction() * 100.0) as u32,
-            progress.done,
-            progress.total,
-            progress.classifier_calls,
-            shown,
-        );
-        eprint!("\r{line:<width$}", width = self.width.max(line.len()));
-        self.width = line.len();
+        let line = status_text(self.verb, progress);
+        // The line is ASCII, so its bytes are its columns.
+        let width = line.len();
+        // Spaces over what is left of a longer line before this one.
+        let cover = self.width.saturating_sub(width);
+        // One write, so the terminal never shows half a line. A failed write
+        // is not a reason to stop the run that this line only describes.
+        let _ = out.write_all(format!("\r{line}{:cover$}", "").as_bytes());
+        self.width = width;
     }
 
-    /// Erase the line so it does not collide with results.
+    /// Erase the line so it does not collide with what is printed next.
     fn finish(&mut self) {
+        self.finish_to(&mut std::io::stderr());
+    }
+
+    fn finish_to(&mut self, out: &mut impl std::io::Write) {
         if self.enabled && self.width > 0 {
-            eprint!("\r{:width$}\r", "", width = self.width);
+            let _ = out.write_all(format!("\r{:width$}\r", "", width = self.width).as_bytes());
+            self.width = 0;
         }
     }
 }
@@ -1458,7 +1499,8 @@ fn report_staleness(args: &FindArgs) {
 mod tests {
     use super::{
         display_path, driver_program, merge_manifests, newer_index_hint, parse_dim, parse_levels,
-        repository_at_or_above, should_register, snippet_lines, spread_note,
+        repository_at_or_above, should_register, snippet_lines, spread_note, status_text,
+        ProgressLine,
     };
     use map_format::{Manifest, ObjectEntry, ObjectKey, Tier};
     use map_query::LevelFilter;
@@ -1965,5 +2007,163 @@ mod tests {
         assert!(parse_dim("lexical:1e30=x").is_err(), "weight past the cap");
         assert!(parse_dim("=x").is_err(), "empty dimension name");
         assert!(parse_dim("lexical").is_err(), "no '=' at all");
+    }
+
+    fn progress(done: usize, total: usize, resource: &str) -> map_index::Progress<'_> {
+        map_index::Progress {
+            done,
+            total,
+            classifier_calls: done,
+            resource,
+        }
+    }
+
+    /// A line that draws. Under `cargo test` stderr is not a terminal, so
+    /// `ProgressLine::new` gives one that does not.
+    fn drawing() -> ProgressLine {
+        ProgressLine {
+            verb: "indexing",
+            enabled: true,
+            last_drawn: long_ago(),
+            width: 0,
+        }
+    }
+
+    /// Past the redraw interval, so the next tick draws.
+    fn long_ago() -> std::time::Instant {
+        std::time::Instant::now() - std::time::Duration::from_secs(1)
+    }
+
+    #[test]
+    fn a_status_line_shows_the_resources_done_and_the_total() {
+        assert_eq!(
+            status_text("indexing", &progress(280, 622, "src/lib.rs")),
+            "  indexing  45%  280/622  280 classified"
+        );
+    }
+
+    #[test]
+    fn a_status_line_has_the_same_text_for_each_name_of_a_resource() {
+        // The name of a resource is the one part of a report that has no
+        // limit of length, and the one part that a hostile clone controls. A
+        // line that wraps cannot be drawn over, and a carriage return or an
+        // escape sequence in a file name would redraw the terminal.
+        let hostile = format!("{}設計\r\x1b[2K.md", "ドキュメント/".repeat(40));
+        assert_eq!(
+            status_text("indexing", &progress(1, 2, &hostile)),
+            status_text("indexing", &progress(1, 2, "a.rs"))
+        );
+    }
+
+    #[test]
+    fn a_status_line_of_a_corpus_of_millions_fits_a_narrow_terminal() {
+        // 52 columns for counts of seven digits, in each of the two forms.
+        let during = status_text("indexing", &progress(1_234_566, 1_234_567, "a.rs"));
+        let after = status_text("indexing", &progress(1_234_567, 1_234_567, ""));
+        assert_eq!(
+            during,
+            "  indexing  99%  1234566/1234567  1234566 classified"
+        );
+        assert_eq!(after, "  indexing 100%  1234567/1234567  writing the index");
+        assert!(during.len() <= 52 && after.len() <= 52);
+        assert!(during.is_ascii() && after.is_ascii());
+    }
+
+    #[test]
+    fn a_shorter_status_line_covers_the_line_before_it() {
+        // The line gets shorter in one condition only: a count of classifier
+        // calls of seven digits or more makes way for the text of the last
+        // report.
+        let report = |done, resource| map_index::Progress {
+            done,
+            total: 10,
+            classifier_calls: 12_345_678,
+            resource,
+        };
+        let mut out = Vec::new();
+        let mut line = drawing();
+        line.tick_to(&mut out, &report(5, "a.rs"));
+        let first = out.len();
+        line.tick_to(&mut out, &report(10, ""));
+
+        let text = String::from_utf8(out).unwrap();
+        let (before, after) = text.split_at(first);
+        assert_eq!(before, "\r  indexing  50%  5/10  12345678 classified");
+        assert_eq!(after, "\r  indexing 100%  10/10  writing the index ");
+        assert_eq!(after.len(), before.len(), "nothing of the first line stays");
+        // No line feed: the status is one row, however many times it draws.
+        assert!(!text.contains('\n'));
+    }
+
+    #[test]
+    fn a_tick_inside_the_redraw_interval_draws_nothing() {
+        // A draw for each resource makes the terminal the slow part of a run
+        // on a large corpus. The last draw is put in the future, so that the
+        // test does not depend on how fast it runs.
+        let mut out = Vec::new();
+        let mut line = ProgressLine {
+            last_drawn: std::time::Instant::now() + std::time::Duration::from_secs(60),
+            ..drawing()
+        };
+        for done in 0..50 {
+            line.tick_to(&mut out, &progress(done, 50, "src/lib.rs"));
+        }
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn the_report_after_the_last_resource_is_drawn_inside_the_interval() {
+        // This line stays on the screen while the index is written. A count
+        // from an earlier draw would say that resources are still to come.
+        let mut out = Vec::new();
+        let mut line = ProgressLine {
+            last_drawn: std::time::Instant::now() + std::time::Duration::from_secs(60),
+            ..drawing()
+        };
+        line.tick_to(&mut out, &progress(236, 237, "tests/util.rs"));
+        assert!(out.is_empty());
+        line.tick_to(&mut out, &progress(237, 237, ""));
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "\r  indexing 100%  237/237  writing the index"
+        );
+    }
+
+    #[test]
+    fn the_end_of_a_run_leaves_an_empty_row_for_the_text_that_comes_next() {
+        let mut out = Vec::new();
+        let mut line = drawing();
+        line.finish_to(&mut out);
+        assert!(
+            out.is_empty(),
+            "a run that drew nothing has nothing to erase"
+        );
+
+        line.tick_to(&mut out, &progress(1, 2, "a.rs"));
+        let drawn = out.len() - 1; // without the carriage return
+        out.clear();
+        line.finish_to(&mut out);
+        assert_eq!(
+            String::from_utf8(out.clone()).unwrap(),
+            format!("\r{}\r", " ".repeat(drawn))
+        );
+
+        out.clear();
+        line.finish_to(&mut out);
+        assert!(out.is_empty(), "the line is erased one time");
+    }
+
+    #[test]
+    fn a_status_line_that_is_off_writes_nothing() {
+        // The state of an agent that runs `map` through a shell: stderr is
+        // not a terminal, and control characters in its output are noise.
+        let mut out = Vec::new();
+        let mut line = ProgressLine {
+            enabled: false,
+            ..drawing()
+        };
+        line.tick_to(&mut out, &progress(1, 2, "a.rs"));
+        line.finish_to(&mut out);
+        assert!(out.is_empty());
     }
 }

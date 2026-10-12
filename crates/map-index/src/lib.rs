@@ -236,11 +236,16 @@ pub fn stale(root: &Path) -> Result<Option<StaleReport>, IndexError> {
 /// most for the expensive case: with a dense or LLM-backed dimension an update
 /// is slow *and costs money*, and whoever asked for it should be able to watch
 /// it happen and interrupt.
+///
+/// One report comes before each resource is read, with `done` resources
+/// behind it. A last one, with `done == total` and no resource, comes when
+/// every resource is done and the index itself is still to be written.
 #[derive(Clone, Copy, Debug)]
 pub struct Progress<'a> {
     pub done: usize,
     pub total: usize,
     pub classifier_calls: usize,
+    /// The resource about to be read. Empty in the last report.
     pub resource: &'a str,
 }
 
@@ -649,6 +654,16 @@ fn run_inner(
         manifest.roots.insert(resource.key.clone(), root_entry);
         stats.indexed += 1;
     }
+
+    // What follows reads no resource and still takes time: the fabricator,
+    // the manifest, and the packs. Without this report a caller goes on
+    // showing the last resource it heard of, at a count below the total.
+    progress(Progress {
+        done: resources.len(),
+        total: resources.len(),
+        classifier_calls: stats.classifier_calls,
+        resource: "",
+    });
 
     // Read before fabrication, which labels through a different stage: this
     // counts only segments the classifier gave up on.
