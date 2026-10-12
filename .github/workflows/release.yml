@@ -1,0 +1,289 @@
+name: release
+
+# A push of a tag `vX.Y.Z` makes a release. The two other triggers are dry
+# runs. A dry run builds each archive and does a test of each install script.
+# It makes no release. The `paths` list has each file that can break a release
+# and that ci.yml does not run.
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - install.sh
+      - install.ps1
+
+# The default for each job. Only a job that writes to the release gets more.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Third-party actions are pinned to a full commit SHA, with the version in a
+# trailing comment. ci.yml gives the reason. This workflow uses one action
+# only: the `gh` program of the runner does each step on the release.
+#
+# No job uses a build cache. A release binary comes from an empty target
+# directory. Thus an artifact of a different commit cannot be in it.
+
+jobs:
+  draft:
+    name: draft release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # `map upgrade` compares the version in the binary with the `VERSION`
+      # file of the release, and that file gets its version from the tag. If
+      # the two are different, no binary of the release is the newest version
+      # for `map upgrade`, and each run of that command downloads again.
+      - name: Check that the tag is the workspace version
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\([^"]*\)".*/\1/p' Cargo.toml)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::The tag is $GITHUB_REF_NAME, but the workspace version in Cargo.toml is $version. Put the tag v$version on the commit that has that version."
+            exit 1
+          fi
+
+      # A draft, because a release that the public can see must be complete:
+      # the address `releases/latest/download` points to it from that moment.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "The install commands are in the README: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY#install"
+
+  build:
+    name: ${{ matrix.target }}
+    needs: draft
+    # A dry run does not run `draft`, and GitHub does not run a job when a
+    # job that it needs did not run. A status function in the condition
+    # removes that rule. This condition lets the builds run after a `draft`
+    # that was successful and after a `draft` that did not run.
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ${{ matrix.os }}
+    # For `gh release upload`. A permission cannot depend on the event. Thus a
+    # dry run has it too. But only the upload step gets the token, and a dry
+    # run does not do that step.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+            # Without this flag the binary imports VCRUNTIME140.dll, and it
+            # does not start on a machine that has no Visual C++ runtime.
+            rustflags: -C target-feature=+crt-static
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            archive: tar.gz
+          # musl, not glibc: a static binary does not use the C library of
+          # the machine. Thus one binary is correct for each Linux system.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.target }}
+      ARCHIVE: ${{ matrix.archive }}
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      # The token does not stay in the git configuration. The build runs the
+      # build script of each dependency, and the token of this job can write
+      # to the release.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          rustup show  # honours rust-toolchain.toml
+          rustup target add "$TARGET"
+
+      # `blake3` and `ring` compile C, and a runner has no C compiler for
+      # musl. `musl-tools` supplies `musl-gcc`. `CC_<target>` names it,
+      # because for arm64 the `cc` crate starts `aarch64-linux-musl-gcc` if
+      # the variable is not set.
+      - name: Install the C compiler for musl
+        if: contains(matrix.target, 'linux-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
+
+      # Two binaries for each target: the default build, and the build with
+      # all features. `MAP_RELEASE_ASSET` tells the binary that a release made
+      # it, and it is the name of the archive that `map upgrade` downloads.
+      # The name of an archive has no version. Thus the address of the newest
+      # archive is the same for each release.
+      - name: Build and package
+        run: |
+          case "$TARGET" in
+            *windows*) exe=.exe ;;
+            *) exe= ;;
+          esac
+          mkdir dist
+          package() {
+            asset=$1
+            shift
+            MAP_RELEASE_ASSET=$asset cargo build --release --locked -p map-cli --target "$TARGET" "$@"
+            rm -rf stage
+            mkdir stage
+            cp "target/$TARGET/release/map$exe" LICENSE stage/
+            if [ "$ARCHIVE" = zip ]; then
+              powershell -NoProfile -Command "Compress-Archive -Path stage/* -DestinationPath dist/$asset.zip"
+            else
+              tar -czf "dist/$asset.tar.gz" -C stage map LICENSE
+            fi
+          }
+          package "map-$TARGET"
+          package "map-full-$TARGET" --all-features
+          ls -l dist
+
+      # The job does a test of the install script of its platform with the
+      # archives that it made. `MAP_INSTALL_BASE` is a local directory. Thus
+      # the test uses no network, and it runs before a file is in the release.
+      - name: Test install.sh
+        if: runner.os != 'Windows'
+        run: |
+          (
+            cd dist
+            if command -v sha256sum >/dev/null; then
+              sha256sum map-* >SHA256SUMS
+            else
+              shasum -a 256 map-* >SHA256SUMS
+            fi
+            cat SHA256SUMS
+          )
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\([^"]*\)".*/\1/p' Cargo.toml)
+          commit=$(git rev-parse --short=8 HEAD)
+          check() {
+            dir=$(mktemp -d)
+            MAP_INSTALL_BASE="$PWD/dist" MAP_INSTALL_DIR="$dir" MAP_INSTALL_VARIANT=$1 sh ./install.sh
+            "$dir/map" --version | tee version.txt
+            # The space after the commit makes `<commit>-dirty` an error. A
+            # binary with that mark is not the newest version for `map upgrade`,
+            # and each run of that command downloads again.
+            if ! grep -q "^map $version ($commit " version.txt; then
+              echo "::error::The $1 binary does not report version $version and commit $commit."
+              exit 1
+            fi
+            if ! grep -qx "features: $2" version.txt; then
+              echo "::error::The $1 binary does not report the features: $2"
+              exit 1
+            fi
+            rm -rf "$dir"
+          }
+          check default none
+          check full "auto-distilled llm"
+
+      # Windows PowerShell 5.1, not PowerShell 7: 5.1 is the version that each
+      # Windows machine has. The script goes to `Invoke-Expression` as text,
+      # as it does in the install command of the README.
+      - name: Test install.ps1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $sums = Get-ChildItem dist -Filter 'map-*' | Sort-Object Name | ForEach-Object {
+              (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name
+          }
+          Set-Content -LiteralPath dist\SHA256SUMS -Value $sums -Encoding ascii
+          Get-Content dist\SHA256SUMS
+
+          $manifest = Get-Content -Raw Cargo.toml
+          if ($manifest -notmatch '(?s)\[workspace\.package\].*?version = "([^"]*)"') { throw 'Cargo.toml has no workspace version.' }
+          $version = $Matches[1]
+          $commit = git rev-parse --short=8 HEAD
+
+          foreach ($case in @(@('default', 'none'), @('full', 'auto-distilled llm'))) {
+              $variant, $features = $case
+              $env:MAP_INSTALL_BASE = Join-Path $PWD 'dist'
+              $env:MAP_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "map-$variant"
+              $env:MAP_INSTALL_VARIANT = $variant
+              powershell -NoProfile -Command 'Get-Content -Raw install.ps1 | Invoke-Expression'
+              if ($LASTEXITCODE -ne 0) { throw "install.ps1 stopped with status $LASTEXITCODE for the $variant binary." }
+              $shown = & (Join-Path $env:MAP_INSTALL_DIR 'map.exe') --version
+              $shown
+              # The space after the commit makes `<commit>-dirty` an error.
+              # A binary with that mark is not the newest version for
+              # `map upgrade`, and each run of that command downloads again.
+              if (-not @($shown)[0].StartsWith("map $version ($commit ")) {
+                  throw "The $variant binary does not report version $version and commit $commit."
+              }
+              if ($shown -notcontains "features: $features") {
+                  throw "The $variant binary does not report the features: $features"
+              }
+          }
+
+          # `map upgrade` extracts the zip with the `tar.exe` of Windows, not
+          # with PowerShell. This is the only test of that program on the zip.
+          foreach ($zip in Get-ChildItem dist -Filter '*.zip') {
+              $members = & "$env:SystemRoot\System32\tar.exe" -tf $zip.FullName
+              if ($members -notcontains 'map.exe') { throw "tar.exe does not find map.exe in $($zip.Name)." }
+          }
+
+      # `--clobber` lets a second run of a job that stopped replace the
+      # archive that its first run uploaded.
+      - name: Upload the archives to the draft release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/map-* --clobber
+
+  publish:
+    name: publish
+    needs: [draft, build]
+    # This condition has no status function. Thus the job runs only when
+    # `draft` and each build were successful, and a public release has each
+    # archive.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # `SHA256SUMS` has the format of `sha256sum`: the hash, two spaces, and
+      # the file name, with one line for each archive in the sequence of the
+      # names. The install scripts read it. `VERSION` is one line, the version
+      # and the full commit, and `map upgrade` reads it.
+      - name: Write SHA256SUMS and VERSION
+        run: |
+          export LC_ALL=C
+          mkdir dist
+          gh release download "$GITHUB_REF_NAME" --dir dist --pattern 'map-*'
+          (cd dist && sha256sum map-* >SHA256SUMS && cat SHA256SUMS)
+          printf '%s %s\n' "${GITHUB_REF_NAME#v}" "$(git rev-parse HEAD)" >dist/VERSION
+          cat dist/VERSION
+
+      # The install scripts are release files too. Thus the address of a
+      # script is constant, and a script is the one of its release.
+      - name: Upload the release files
+        run: gh release upload "$GITHUB_REF_NAME" dist/SHA256SUMS dist/VERSION install.sh install.ps1 --clobber
+
+      # The last step. A release that the public can see has each file.
+      - name: Publish the release
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

@@ -161,14 +161,18 @@ enum Command {
 
     /// Install the newest version of MAP and replace this binary.
     ///
-    /// The command runs `cargo install` with the cargo features of this
-    /// binary. It builds MAP from source. Thus Rust and a network connection
-    /// are necessary. This binary stays in its location until the build is
-    /// complete. If this binary is the newest version, the command changes no
-    /// files.
+    /// For a binary from a release, the command downloads the binary of the
+    /// newest release. `curl`, `tar`, and a network connection are necessary.
+    ///
+    /// For a binary that cargo built, the command runs `cargo install` with
+    /// the cargo features of this binary. It builds MAP from source. Thus
+    /// Rust and a network connection are necessary.
+    ///
+    /// This binary stays in its location until the new binary is complete.
+    /// If this binary is the newest version, the command changes no files.
     Upgrade {
         /// Get the source from this git repository. Default: the MAP
-        /// repository.
+        /// repository. This flag is only for a binary that cargo built.
         #[arg(long, value_name = "URL")]
         git: Option<String>,
     },

@@ -14,7 +14,7 @@ type of a resource. Discovery reads a directory tree, and the segmenter cuts
 line windows. The prompts and the dimension descriptions of a corpus tell a
 model the type of its material.
 
-> **Status: alpha (`v0.0.5`).** The format on disk is a draft and can change.
+> **Status: alpha (`v0.0.6`).** The format on disk is a draft and can change.
 > See [`spec/format-v1.md`](spec/format-v1.md). MAP is not on crates.io. Build
 > it from source.
 
@@ -25,10 +25,11 @@ model the type of its material.
 
 ## Quick start
 
-Install the binary. Rust is necessary (see [Install](#install)):
+Install the binary. This command is for Linux and macOS. [Install](#install)
+gives the command for Windows and the build with cargo:
 
 ```console
-$ cargo install --git https://github.com/hanpa-nai/map map-cli --locked
+$ curl -fsSL https://github.com/hanpa-nai/map/releases/latest/download/install.sh | sh
 ```
 
 Build the index one time, in the root of your repository:
@@ -95,6 +96,63 @@ about a language or a file type.
 
 ## Install
 
+### Install a release binary
+
+Rust is not necessary. One command downloads the `map` binary of the newest
+release and puts it in the install directory.
+
+On Linux and macOS:
+
+```console
+$ curl -fsSL https://github.com/hanpa-nai/map/releases/latest/download/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```console
+> irm https://github.com/hanpa-nai/map/releases/latest/download/install.ps1 | iex
+```
+
+On Linux and macOS, the install directory is `~/.local/bin`. On Windows, it is
+`%LOCALAPPDATA%\Programs\map\bin`. To use a different directory, set
+`MAP_INSTALL_DIR` before you run the command.
+
+The script does not change `PATH`. If the install directory is not on `PATH`,
+the script prints the command that adds it.
+
+The script downloads one archive and the `SHA256SUMS` file of the release. If
+the SHA-256 of the archive is not the recorded value, the script stops and
+installs no file.
+
+A release has binaries for these targets:
+
+| operating system | CPU | target |
+|---|---|---|
+| Linux | x86-64 | `x86_64-unknown-linux-musl` |
+| Linux | ARM64 | `aarch64-unknown-linux-musl` |
+| macOS | ARM64 | `aarch64-apple-darwin` |
+| macOS | x86-64 | `x86_64-apple-darwin` |
+| Windows | x86-64 | `x86_64-pc-windows-msvc` |
+
+The Linux binary is static. Thus it does not use the `libc` of the system. On
+Windows on ARM64, the script installs the x86-64 binary.
+
+Each target has two binaries: the default binary and the binary with all
+features. The default binary has the `lexical` and `declaration` dimensions.
+The binary with all features also has the `semantic` and `descriptive`
+dimensions and the `map model fetch` command. To install it, set
+`MAP_INSTALL_VARIANT` to `full`:
+
+```console
+$ curl -fsSL https://github.com/hanpa-nai/map/releases/latest/download/install.sh | MAP_INSTALL_VARIANT=full sh
+> $env:MAP_INSTALL_VARIANT = 'full'; irm https://github.com/hanpa-nai/map/releases/latest/download/install.ps1 | iex
+```
+
+A release has no binary for the `distilled` feature only or for the
+`auto-distilled` feature only. For those binaries, build MAP with cargo.
+
+### Build with cargo
+
 Rust 1.88 or a newer version is necessary. CI does the tests on Linux, macOS,
 and Windows.
 
@@ -141,25 +199,39 @@ $ map upgrade
 ```
 
 `map upgrade` installs the newest version and replaces the installed binary.
-It keeps the cargo features of that binary. If the binary is the newest
-version, the command changes no files.
+It keeps the features of that binary. If the binary is the newest version, the
+command changes no files.
 
-The command runs `cargo install`. Thus Rust and a network connection are
+The command has two procedures. The binary knows which procedure applies to
+it.
+
+**A release binary.** The install script installs this binary. `map upgrade`
+downloads the archive of the newest release and extracts the new binary. It
+gets the default binary or the binary with all features, the same as the
+installed binary. `curl`, `tar`, and a network connection are necessary. Rust
+is not necessary.
+
+This procedure does not calculate the SHA-256 of the archive. The install
+script does, and it can also replace an installed binary.
+`map upgrade --git` does not apply to a release binary.
+
+**A binary that cargo built.** `map upgrade` runs `cargo install` with the
+cargo features of the installed binary. Thus Rust and a network connection are
 necessary. A build of the default binary is 40 s to 80 s on a laptop.
-
 `map upgrade` replaces only a binary that `cargo install` installed. For a
 different binary, the command changes no files and shows the install command.
 
-The installed binary stays in its location during the build, and you can use
-it. After the build, `map upgrade` replaces it. If cargo stops with an error,
-or if you stop the command, the installed binary does not change.
+The installed binary stays in its location during the download or the build,
+and you can use it. Then `map upgrade` replaces it. If the download or the
+build stops with an error, or if you stop the command, the installed binary
+does not change.
 
-On Windows, a `map.exe.old` file stays in the `bin` directory after an
+On Windows, a `map.exe.old` file stays in the directory of the binary after an
 upgrade. The next start of `map` removes it.
 
-`map upgrade` builds in a temporary directory. Thus `cargo install --list`
-continues to show the version of the last `cargo install`. `map --version`
-shows the version of the binary.
+With cargo, `map upgrade` builds in a temporary directory. Thus
+`cargo install --list` continues to show the version of the last
+`cargo install`. `map --version` shows the version of the binary.
 
 `map --version` shows the version, the commit, and the features of the
 installed binary:
@@ -171,6 +243,8 @@ features: none
 upgrade:  map upgrade
           or: cargo install --git https://github.com/hanpa-nai/map map-cli --locked
 ```
+
+For a release binary, the last line shows the command of the install script.
 
 Version 0.0.0 has no `upgrade` command. To upgrade from 0.0.0, run the install
 command one more time, with the same `--features` as in the first install.
@@ -942,7 +1016,7 @@ These rules apply:
 | `map brief [PATH]` | Print a summary of the index for an AI model. Prints no text when there is no index. |
 | `map classify PATH [-d DIM] [-n N]` | Show the classifier output for one file. Writes no files. (`llm` feature) |
 | `map status [PATH]` | Show the record count and the dimensions |
-| `map upgrade [--git URL]` | Install the newest version and replace this binary. Uses cargo and the network. |
+| `map upgrade [--git URL]` | Install the newest version and replace this binary. Uses the network, and `curl` and `tar` or cargo. |
 | `map gc [PATH] [--prune]` | Find objects that no manifest reaches. Delete them with `--prune`. |
 | `map llm login` | Get the endpoint, model, and key from you, and save them (`llm` feature) |
 | `map llm status` | Show the saved connection, without the key (`llm` feature) |
@@ -1249,12 +1323,15 @@ Each pin is one specified commit, not a branch. The judgments in
 
 ### Release a version
 
-Give each change that users must get a new version number. `map upgrade` and
-`cargo install` get the newest commit of `main`. But with a permanent target
-directory, `cargo install --git` does not build all crates again when the
-version number is the same. The binary then contains previous code (measured
-with cargo 1.99). A new version number makes cargo build all crates again.
-`map upgrade` always builds all crates.
+Give each change that users must get a new version number. With cargo,
+`map upgrade` and `cargo install` get the newest commit of `main`. But with a
+permanent target directory, `cargo install --git` does not build all crates
+again when the version number is the same. The binary then contains previous
+code (measured with cargo 1.99). A new version number makes cargo build all
+crates again. With cargo, `map upgrade` always builds all crates.
+
+A release binary gets the newest release. Thus its users get a change only
+after the release of a new version.
 
 ```console
 $ python scripts/set-version.py 0.0.2   # the workspace, each path dependency, and this file
@@ -1263,6 +1340,27 @@ $ cargo check --workspace               # updates Cargo.lock
 
 Then commit the changes and push them. The script reads each file again after
 it writes, and it stops with an error if a version is not correct.
+
+To make a release, put a tag on the commit that has the new version. Then push
+the tag:
+
+```console
+$ git tag v0.0.2
+$ git push origin v0.0.2
+```
+
+The tag starts the release procedure of `.github/workflows/release.yml` in
+GitHub Actions. The procedure stops if the tag is not `v` and the version in
+`Cargo.toml`. It builds the two binaries for each target. It does a test of
+the install script of each platform with the archives. Then it makes the
+release public.
+
+The release is a draft until all the builds are complete. Thus the install
+commands get the previous release until that time.
+
+To do a dry run, start the procedure manually on the Actions page of the
+repository (`workflow_dispatch`). A dry run builds the archives and does the
+tests. It makes no release.
 
 The section [After an upgrade](#after-an-upgrade) gives version numbers.
 Before a release, make sure that it is correct for the new version.
@@ -1293,6 +1391,10 @@ CI does these checks with `-D warnings`:
 **The tests run with default features only.** A `clippy` step with all features
 compiles the `distilled` and `llm` code. The model weights are necessary for
 the tests of that code. Thus those tests do not run in CI.
+
+The release procedure is a different file, `.github/workflows/release.yml`.
+A pull request that changes that file or an install script starts a dry run.
+See [Release a version](#release-a-version).
 
 ### The evaluation harness
 

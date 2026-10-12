@@ -6,12 +6,18 @@
 //! prints "Replaced package" and leaves the previous binary in place when the
 //! version number did not change.
 //!
-//! Emits two variables, each empty when there is nothing trustworthy to say:
+//! Emits three variables, each empty when there is nothing trustworthy to say:
 //!
 //! * `MAP_BUILD_COMMIT` — eight hex characters, with `-dirty` appended when
 //!   the sources differ from that commit.
 //! * `MAP_BUILD_DATE` — the commit's date, not today's, so the same commit
 //!   always builds the same string.
+//! * `MAP_RELEASE_ASSET` — the name of the release archive this binary goes
+//!   into, such as `map-full-x86_64-unknown-linux-musl`. Only the release
+//!   workflow sets it. Nothing else tells a binary that a release made it,
+//!   and `map upgrade` has to know: a release binary downloads the next
+//!   release, because its machine can have no Rust. Each other binary runs
+//!   cargo.
 
 use std::path::Path;
 use std::process::Command;
@@ -94,4 +100,10 @@ fn main() {
     let (commit, date) = identity(&root).unwrap_or_default();
     println!("cargo:rustc-env=MAP_BUILD_COMMIT={commit}");
     println!("cargo:rustc-env=MAP_BUILD_DATE={date}");
+
+    // Always emitted, empty when not set: `env!` in `build_info.rs` is a
+    // compile error for a variable that does not exist.
+    println!("cargo:rerun-if-env-changed=MAP_RELEASE_ASSET");
+    let asset = std::env::var("MAP_RELEASE_ASSET").unwrap_or_default();
+    println!("cargo:rustc-env=MAP_RELEASE_ASSET={}", asset.trim());
 }
