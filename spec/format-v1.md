@@ -361,7 +361,9 @@ full index.
   for one query.
 - The query interface is the **union of the dimensions** of the loaded indexes.
   Each index gives scores only for the dimensions that it has, and it ignores
-  the others.
+  the others. An index has a dimension when its manifest records that
+  dimension. A dimension that the configuration enables and the manifest does
+  not record is not a dimension of that index.
 - Two dimensions are compatible when `name + artifact_fingerprint` are equal.
   The rule uses the artifact fingerprint, not the fingerprint of the full
   configuration. Thus an edit to the `description` of a dimension does not

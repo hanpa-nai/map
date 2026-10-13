@@ -14,7 +14,7 @@ type of a resource. Discovery reads a directory tree, and the segmenter cuts
 line windows. The prompts and the dimension descriptions of a corpus tell a
 model the type of its material.
 
-> **Status: alpha (`v0.0.6`).** The format on disk is a draft and can change.
+> **Status: alpha (`v0.0.7`).** The format on disk is a draft and can change.
 > See [`spec/format-v1.md`](spec/format-v1.md). MAP is not on crates.io. Build
 > it from source.
 
@@ -298,6 +298,11 @@ in a new directory.
   .gitattributes text eol=lf
   index/** -text
   ```
+- **From version 0.0.7, a search stops with an error when the index has no
+  data for a dimension that the configuration enables.** A previous version
+  printed `no matches`. The error gives the repair: run `map index` or
+  `map find -u`. Version 0.0.7 reads and writes the same index as version
+  0.0.6, and no index build is necessary after the upgrade.
 - **The git merge driver continues to operate.** The driver command contains
   the path of the binary. If no binary is at that path, MAP writes the path of
   the binary that runs into the git configuration. `map init`, `map index`,
@@ -587,6 +592,10 @@ document length for all indexes together.
   different prompts or embedders. It does not calculate an average of them.
 - MAP ignores an index that does not have a dimension of the query. This is not
   an error.
+- After you enable a dimension and before the next index build, an index has
+  the dimension in its configuration and no data for it. MAP ignores that
+  index for the dimension and prints a note with the name of the index. If no
+  index has data for the dimension, the search stops with an error.
 
 The user file `~/.map/config.toml` can contain a list of permanent roots. Each
 `map find` adds them, the same as if you gave them with `--root`:
@@ -953,6 +962,17 @@ A build that omits a stage also shows the stages that it omitted.
 You commit `.map/config.toml`, and you can edit it. MAP builds the index from
 this file. Thus an edit to a dimension changes its fingerprint and invalidates
 only the objects of that dimension.
+
+After you enable a dimension, run `map index` or `map find -u`. Before that
+build, the index has no data for the dimension, and a search on it stops with
+this error:
+
+```console
+$ map find -d 'semantic=a retry with a longer delay'
+map: dimension "semantic" is enabled in `.map/config.toml`, but the index was built without it. Run `map index` or `map find -u`, and then search again.
+```
+
+`map status` shows such a dimension in a `not built` line.
 
 ```toml
 version = 1

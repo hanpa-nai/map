@@ -605,6 +605,12 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("Index at {}", display_path(index.root()));
             println!("  records:    {}", index.len());
             println!("  dimensions: {}", index.dimensions().join(", "));
+            if !index.unbuilt().is_empty() {
+                println!(
+                    "  not built:  {} (enabled in the config after the last build; run `map index`)",
+                    index.unbuilt().join(", ")
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
 
@@ -1342,6 +1348,22 @@ fn find(mut args: FindArgs) -> Result<ExitCode, String> {
     let hits = index
         .find_at(&query, usize::MAX, levels)
         .map_err(|e| e.to_string())?;
+
+    // Only a federation gets here with such a member: when no index built the
+    // dimension, the search stopped above. The query is correct, so this is a
+    // note. Without it, a member that scored less than the query asked for
+    // looks the same as a member that had nothing to find.
+    if !args.quiet {
+        for member in index.indexes() {
+            for name in query.keys().filter(|n| member.unbuilt().contains(n)) {
+                eprintln!(
+                    "map: the index {:?} was built without the dimension {name:?}, and did not \
+                     score it. Run `map index` there.",
+                    member.origin()
+                );
+            }
+        }
+    }
 
     if hits.is_empty() {
         println!("no matches");

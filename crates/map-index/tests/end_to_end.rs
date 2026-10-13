@@ -340,6 +340,65 @@ fn index_then_find_locates_the_right_file() {
 }
 
 #[test]
+fn a_dimension_enabled_after_the_build_is_refused_until_the_next_build() {
+    // The config says what to build and the manifest says what was built. A
+    // search that took the dimension from the config alone found nothing in
+    // it, printed "no matches", and counted it in the mean of each other
+    // dimension: `lexical` 0.936 came back as 0.468, with no message.
+    let corpus = Corpus::new("enabled-not-built");
+    map_index::run(corpus.path()).unwrap();
+    let before = map_query::Index::open(corpus.path())
+        .unwrap()
+        .find(&query("refresh token"), 5)
+        .unwrap();
+
+    widen_the_structural_group(corpus.path());
+    let index = map_query::Index::open(corpus.path()).unwrap();
+    assert_eq!(index.dimensions(), ["declaration", "lexical"]);
+    assert_eq!(index.unbuilt(), ["other"]);
+
+    let other = map_query::Query::from([(
+        "other".to_owned(),
+        map_query::QueryTerm::new("refresh token"),
+    )]);
+    let error = index.find(&other, 5).unwrap_err();
+    assert!(
+        matches!(&error, map_query::QueryError::NotBuilt { name, .. } if name == "other"),
+        "got {error}"
+    );
+    let text = error.to_string();
+    assert!(
+        text.contains("map index") && text.contains("map find -u"),
+        "{text}"
+    );
+
+    // With a built dimension in the same query, the answer is the same error,
+    // not the hits of `lexical` at half of their score.
+    let mut both = query("refresh token");
+    both.extend(other.clone());
+    assert!(matches!(
+        index.find(&both, 5),
+        Err(map_query::QueryError::NotBuilt { .. })
+    ));
+
+    // A query that does not name the dimension is not changed by it.
+    let after = index.find(&query("refresh token"), 5).unwrap();
+    assert_eq!(after.len(), before.len());
+    for (a, b) in after.iter().zip(&before) {
+        assert_eq!((&a.resource, a.start), (&b.resource, b.start));
+        assert_eq!(a.score, b.score, "{}", a.resource);
+    }
+
+    // The repair that the error gives.
+    map_index::refresh(corpus.path()).unwrap();
+    let index = map_query::Index::open(corpus.path()).unwrap();
+    assert!(index.unbuilt().is_empty());
+    assert_eq!(index.dimensions(), ["declaration", "lexical", "other"]);
+    assert!(!index.find(&other, 5).unwrap().is_empty());
+    assert!(!index.find(&both, 5).unwrap().is_empty());
+}
+
+#[test]
 fn a_declared_name_outranks_its_callers_in_the_declaration_dimension() {
     let corpus = Corpus::new("declaration");
     // Three calls in one file: under BM25 over whole content this file

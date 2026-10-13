@@ -37,6 +37,15 @@ pub enum QueryError {
     },
     #[error("unknown dimension {name:?}; this index has: {available}")]
     UnknownDimension { name: String, available: String },
+    /// Not `UnknownDimension`: the name is correct and the repair is a build,
+    /// not a different query.
+    ///
+    /// `member` names the index when the query went to more than one.
+    #[error("{}", not_built(.name, .member.as_deref()))]
+    NotBuilt {
+        name: String,
+        member: Option<Origin>,
+    },
     #[error(
         "dimension {dimension:?} uses an embedder and needs the distilled embedder plugin \
          (build with --features distilled and install the model) to encode a query"
@@ -79,6 +88,19 @@ pub enum QueryError {
     Stage(#[from] map_core::Error),
     #[error("could not decode stored payload: {0}")]
     Decode(#[from] serde_json::Error),
+}
+
+fn not_built(name: &str, member: Option<&str>) -> String {
+    match member {
+        None => format!(
+            "dimension {name:?} is enabled in `.map/config.toml`, but the index was built \
+             without it. Run `map index` or `map find -u`, and then search again."
+        ),
+        Some(member) => format!(
+            "dimension {name:?} is enabled in the `.map/config.toml` of the index {member:?}, \
+             but that index was built without it. Run `map index` there, and then search again."
+        ),
+    }
 }
 
 /// One dimension's query: the text to match and its weight in the fused score.
@@ -359,6 +381,14 @@ pub struct Index {
     origin: Origin,
     scorers: BTreeMap<String, Box<dyn Scorer>>,
     dimensions: Vec<String>,
+    /// Dimensions that the config enables and the manifest does not record.
+    ///
+    /// The config says what to build, and the manifest says what was built. A
+    /// dimension here was enabled after the last build, so the index holds
+    /// nothing for it. It stays out of `dimensions`: a search on it finds
+    /// nothing, and it still counted in the fused mean, so each other
+    /// dimension of the query lost half of its score with no message.
+    unbuilt: Vec<String>,
     /// Artifact fingerprint per dimension, from the manifest.
     ///
     /// A dimension's identity is its name *and* this, never the name alone: two
@@ -408,18 +438,38 @@ impl Index {
             source: e,
         })?;
         let config = Config::parse(&config_text)?;
-        let dimensions: Vec<String> = config.active().map(|(n, _)| n.clone()).collect();
+
+        // Best-effort: an index that has been configured but never built has no
+        // manifest, and that is not a query-time error.
+        let manifest = std::fs::read(map_dir.join("manifest.json"))
+            .ok()
+            .and_then(|bytes| map_format::Manifest::from_bytes(&bytes).ok());
+
+        // With no manifest there is nothing to compare the config with, so
+        // each configured dimension counts as built.
+        let is_built = |name: &String| {
+            manifest
+                .as_ref()
+                .is_none_or(|m| m.dimensions.contains_key(name))
+        };
+        let built = || config.active().filter(|(n, _)| is_built(n));
+
+        let dimensions: Vec<String> = built().map(|(n, _)| n.clone()).collect();
+        let unbuilt: Vec<String> = config
+            .active()
+            .map(|(n, _)| n)
+            .filter(|n| !is_built(n))
+            .cloned()
+            .collect();
 
         // A dimension is dense iff it has an embedder: its pack is a DensePack
         // and its query text must be embedded, not tokenized.
-        let dense: BTreeSet<String> = config
-            .active()
+        let dense: BTreeSet<String> = built()
             .filter(|(_, d)| d.emits_tensor())
             .map(|(n, _)| n.clone())
             .collect();
 
-        let search_levels: BTreeMap<String, BTreeSet<u16>> = config
-            .active()
+        let search_levels: BTreeMap<String, BTreeSet<u16>> = built()
             .map(|(n, d)| (n.clone(), d.search_levels()))
             .collect();
 
@@ -540,12 +590,6 @@ impl Index {
             .find_map(|(_, d)| d.embedder.as_ref())
             .and_then(|e| stages.embedder(&e.implementation));
 
-        // Best-effort: an index that has been configured but never built has no
-        // manifest, and that is not a query-time error.
-        let manifest = std::fs::read(map_dir.join("manifest.json"))
-            .ok()
-            .and_then(|bytes| map_format::Manifest::from_bytes(&bytes).ok());
-
         // Refuse a config that searches less than was built. Those records are
         // on disk and referenced by the manifest, but no query would ever return
         // them — for an LLM dimension that is silently discarding what somebody
@@ -594,6 +638,7 @@ impl Index {
             origin: Origin::new(),
             scorers,
             dimensions,
+            unbuilt,
             identities,
             manifest,
             search_levels,
@@ -619,6 +664,16 @@ impl Index {
 
     pub fn dimensions(&self) -> &[String] {
         &self.dimensions
+    }
+
+    /// Dimensions that the config enables and this index was built without.
+    /// The next `map index` or `map find -u` builds them.
+    pub fn unbuilt(&self) -> &[String] {
+        &self.unbuilt
+    }
+
+    fn did_not_build(&self, name: &str) -> bool {
+        self.unbuilt.iter().any(|d| d == name)
     }
 
     /// How many cluster records the manifest reaches, across every dimension.
@@ -661,6 +716,12 @@ impl Index {
         levels: LevelFilter,
     ) -> Result<Vec<Hit>, QueryError> {
         for name in query.keys() {
+            if self.did_not_build(name) {
+                return Err(QueryError::NotBuilt {
+                    name: name.clone(),
+                    member: None,
+                });
+            }
             if !self.scorers.contains_key(name) {
                 return Err(QueryError::UnknownDimension {
                     name: name.clone(),
@@ -1158,9 +1219,18 @@ impl Federation {
         let available = self.dimensions();
         for name in query.keys() {
             if !available.iter().any(|d| d == name) {
-                return Err(QueryError::UnknownDimension {
-                    name: name.clone(),
-                    available: available.join(", "),
+                // A member that enabled the dimension and did not build it
+                // gives the repair. With no such member, the name is wrong.
+                let member = self.indexes.iter().find(|i| i.did_not_build(name));
+                return Err(match member {
+                    Some(index) => QueryError::NotBuilt {
+                        name: name.clone(),
+                        member: (self.indexes.len() > 1).then(|| index.origin.clone()),
+                    },
+                    None => QueryError::UnknownDimension {
+                        name: name.clone(),
+                        available: available.join(", "),
+                    },
                 });
             }
         }
@@ -2157,6 +2227,105 @@ classifier = { impl = \"structural\" }
             fed.find(&query, 10),
             Err(QueryError::UnknownDimension { .. })
         ));
+    }
+
+    /// A built lexical index whose config then enables a second dimension,
+    /// `notes`. The manifest is of the build, so it does not record `notes`.
+    fn lexical_index_that_enabled_notes_after_the_build(text: &str) -> TempMap {
+        let tmp = lexical_index_with_a_vouched_pack(text);
+        let path = tmp.0.join(".map/config.toml");
+        let mut config = std::fs::read_to_string(&path).unwrap();
+        config.push_str(
+            "[dimensions.notes]\ndescription = \"y\"\nclassifier = { impl = \"structural\" }\n",
+        );
+        std::fs::write(&path, config).unwrap();
+        tmp
+    }
+
+    /// An index with no manifest that holds `text` in `lexical` and in `notes`.
+    fn index_with_lexical_and_notes(text: &str) -> TempMap {
+        let tmp = lexical_index_with("src/a.rs", text);
+        std::fs::write(
+            tmp.0.join(".map/config.toml"),
+            "version = 1\n[dimensions.lexical]\ndescription = \"x\"\n\
+             classifier = { impl = \"structural\" }\n\
+             [dimensions.notes]\ndescription = \"y\"\n\
+             classifier = { impl = \"structural\" }\n",
+        )
+        .unwrap();
+        std::fs::copy(
+            tmp.0.join(".map/cache/lexical.pack"),
+            tmp.0.join(".map/cache/notes.pack"),
+        )
+        .unwrap();
+        tmp
+    }
+
+    fn query_on(dimensions: &[&str], text: &str) -> Query {
+        dimensions
+            .iter()
+            .map(|d| ((*d).to_owned(), QueryTerm::new(text)))
+            .collect()
+    }
+
+    #[test]
+    fn a_dimension_that_a_member_enabled_and_no_member_built_gives_the_repair() {
+        // Not "unknown dimension": the name is in the config that the user
+        // just changed, and the repair is a build, not a different query.
+        let enabled = lexical_index_that_enabled_notes_after_the_build("alpha beta");
+        let other = lexical_index_with("src/lib.rs", "alpha gamma");
+        let fed = Federation::open([("enabled", &enabled.0), ("other", &other.0)]).unwrap();
+        assert_eq!(fed.dimensions(), vec!["lexical".to_owned()]);
+
+        let error = fed
+            .find(&query_on(&["lexical", "notes"], "alpha"), 10)
+            .unwrap_err();
+        match &error {
+            QueryError::NotBuilt { name, member } => {
+                assert_eq!(name, "notes");
+                assert_eq!(member.as_deref(), Some("enabled"), "the member to build");
+            }
+            other => panic!("expected NotBuilt, got {other}"),
+        }
+        assert!(error.to_string().contains("map index"), "{error}");
+
+        // One index is not a federation for the reader: no member name.
+        let alone = Federation::open([("enabled", &enabled.0)]).unwrap();
+        let error = alone.find(&query_on(&["notes"], "alpha"), 10).unwrap_err();
+        assert!(
+            matches!(&error, QueryError::NotBuilt { member: None, .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("map find -u"), "{error}");
+    }
+
+    #[test]
+    fn a_member_that_did_not_build_a_dimension_is_a_member_without_it() {
+        // When another member did build the dimension, the query is correct
+        // and runs. The member that did not build it scores what it has, the
+        // same as a member whose config never had the dimension.
+        let built = index_with_lexical_and_notes("alpha beta");
+        let unbuilt = lexical_index_that_enabled_notes_after_the_build("alpha beta");
+        let without = lexical_index_with("src/a.rs", "alpha beta");
+        let fed = Federation::open([
+            ("built", &built.0),
+            ("unbuilt", &unbuilt.0),
+            ("without", &without.0),
+        ])
+        .unwrap();
+        assert_eq!(fed.dimensions(), ["lexical", "notes"]);
+
+        let hits = fed
+            .find(&query_on(&["lexical", "notes"], "alpha"), 10)
+            .unwrap();
+        let of = |origin: &str| {
+            hits.iter()
+                .find(|h| h.origin == origin)
+                .unwrap_or_else(|| panic!("no hit from {origin}"))
+        };
+        assert_eq!(of("built").per_dimension.len(), 2);
+        assert_eq!(of("unbuilt").per_dimension, of("without").per_dimension);
+        assert_eq!(of("unbuilt").score, of("without").score);
     }
 
     /// Like [`lexical_index_with`], plus a manifest recording the dimension's
