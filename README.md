@@ -14,7 +14,7 @@ type of a resource. Discovery reads a directory tree, and the segmenter cuts
 line windows. The prompts and the dimension descriptions of a corpus tell a
 model the type of its material.
 
-> **Status: alpha (`v0.0.7`).** The format on disk is a draft and can change.
+> **Status: alpha (`v0.0.8`).** The format on disk is a draft and can change.
 > See [`spec/format-v1.md`](spec/format-v1.md). MAP is not on crates.io. Build
 > it from source.
 
@@ -303,6 +303,14 @@ in a new directory.
   printed `no matches`. The error gives the repair: run `map index` or
   `map find -u`. Version 0.0.7 reads and writes the same index as version
   0.0.6, and no index build is necessary after the upgrade.
+- **From version 0.0.8, a build that omits a stage (`--degraded allow`) does
+  not record the dimension of that stage.** A search on that dimension then
+  stops with the error of version 0.0.7. With a previous version, the search
+  printed `no matches`. If the embedder was available and the classifier was
+  not, the search gave hits from embeddings of the segment text. An index
+  from such a build keeps the record until the next build. To repair it, run
+  `map index` with a binary that can run each stage. `map brief` gives only
+  the dimensions of the index as query fields.
 - **The git merge driver continues to operate.** The driver command contains
   the path of the binary. If no binary is at that path, MAP writes the path of
   the binary that runs into the git configuration. `map init`, `map index`,
@@ -353,6 +361,11 @@ Update: `map find -u` has no cost for this index. Use `-u` on the first search a
 
 `map brief` prints no text when the directory has no index. Thus an integration
 can run it in each repository.
+
+`map brief` gives only the dimensions that the index has. When the
+configuration enables a dimension that the index does not have, the
+description and the query example do not include it. A `Not built in this index` line gives its
+name.
 
 ### Claude Code
 
@@ -408,6 +421,9 @@ three update rules:
 A binary cannot run the embedder stage when it does not have the `distilled`
 feature, or when the model files are not in `~/.map/models`. `map brief`
 examines the two conditions. It does not load the model.
+
+When the index does not have a dimension and the first rule applies, the rule
+tells the agent to use `-u` on the next search. That update builds the dimension.
 
 An update changes files in `.map/`. Commit those files together with the
 changes to your resources.
@@ -956,6 +972,13 @@ The message gives `map model fetch` only when the binary has that command. A
 binary with only `distilled` tells you the location for the files.
 
 A build that omits a stage also shows the stages that it omitted.
+
+The index does not have the dimension of an omitted stage. The manifest does
+not record that dimension, and the build writes no embeddings for it. A search
+on that dimension stops with the error that
+[Configuration](#configuration) shows. This applies to each person who gets
+the index, not only to the person who used the flag. To add the dimension, run
+`map index` with a binary that can run the stage.
 
 ## Configuration
 

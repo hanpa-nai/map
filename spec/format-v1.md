@@ -246,6 +246,14 @@ A text merge does not resolve a resource that each side changed (§9.5).
 A producer writes an object entry only for an object that a root or a cluster
 tree uses.
 
+**A producer records a dimension only when it completed each stage of that
+dimension.** A producer that cannot run a stage MAY build the other
+dimensions. It MUST NOT record the identity of the dimension that it did not
+build, and it MUST NOT write a tensor for that dimension. A consumer then
+knows that the index does not have the dimension (§7). With a record
+and no data, a search on the dimension looks the same as a search with no
+matches.
+
 **Layout 1.** A manifest with `format_version` 1 has all object entries in the
 `objects` field, a root with no `objects` field, and a `generated_at` time in
 provenance. A reader MUST read layout 1. A producer that builds an index MUST

@@ -52,6 +52,8 @@ dimensions.
 
 An index has only the dimensions that `map brief` shows. If a description in
 `map brief` is different from this table, use the description in `map brief`.
+Do not query a dimension that `map brief` gives in a `Not built in this index`
+line. `map find` stops with an error on that dimension.
 
 Rules:
 

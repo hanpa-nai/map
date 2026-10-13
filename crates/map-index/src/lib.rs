@@ -374,6 +374,13 @@ fn run_inner(
         }
     }
 
+    // A dimension with a stage that did not resolve is not a dimension of
+    // this index: the manifest does not record it, and no tensor is written
+    // for it. The search then stops with the repair. With the record, a
+    // search on it printed "no matches" — or, when only its classifier was
+    // missing, gave hits from tensors of the raw segment text.
+    let omitted: BTreeSet<String> = unresolved.iter().map(|s| s.dimension.clone()).collect();
+
     // The whole cost model: one call per group, not per dimension.
     let names: Vec<&str> = config.active().map(|(n, _)| n.as_str()).collect();
     let groups = group_by_implementation(names.iter().copied(), |name| {
@@ -383,7 +390,12 @@ fn run_inner(
             .and_then(|d| d.classifier.as_ref())
             .map(|c| c.implementation.clone())
     });
-    let embed_groups = group_by_implementation(names.iter().copied(), |name| {
+    // Not the classifier groups above: a descriptor object keeps the key
+    // that a complete build gives it, so an LLM answer that this run paid
+    // for is used again when the missing stage is there. A tensor has no
+    // such cost, and a tensor of an omitted dimension is of the wrong text.
+    let embedded = names.iter().copied().filter(|n| !omitted.contains(*n));
+    let embed_groups = group_by_implementation(embedded, |name| {
         config
             .dimensions
             .get(name)
@@ -404,6 +416,9 @@ fn run_inner(
     let segmenter_fp = Fingerprint::of(segmenter.config().as_bytes());
 
     let mut manifest = Manifest::new(&config, env!("CARGO_PKG_VERSION"), now_unix())?;
+    manifest
+        .dimensions
+        .retain(|name, _| !omitted.contains(name));
     let mut stats = IndexStats {
         degraded: unresolved,
         ..IndexStats::default()

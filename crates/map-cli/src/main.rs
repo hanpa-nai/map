@@ -607,7 +607,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("  dimensions: {}", index.dimensions().join(", "));
             if !index.unbuilt().is_empty() {
                 println!(
-                    "  not built:  {} (enabled in the config after the last build; run `map index`)",
+                    "  not built:  {} (enabled in the config, and not in the last build; run `map index`)",
                     index.unbuilt().join(", ")
                 );
             }
@@ -1070,8 +1070,8 @@ fn prompt_degraded(stages: &[map_index::UnresolvedStage]) -> bool {
     );
     eprint!("{}", map_index::degraded::describe(stages));
     eprintln!();
-    eprintln!("Continuing omits those dimensions from the index. A query against the");
-    eprintln!("result will not look wrong — it will just be missing what they cover.");
+    eprintln!("Continuing omits those dimensions from the index. A search on one of");
+    eprintln!("them then stops with an error, until a build that can run the stage.");
     eprint!("Continue with a partial index? [y/N] ");
     let _ = std::io::stderr().flush();
 

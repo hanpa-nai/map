@@ -308,6 +308,104 @@ fn an_unresolvable_stage_can_be_accepted_explicitly() {
 }
 
 #[test]
+fn a_build_that_omits_a_dimension_does_not_record_it() {
+    // The manifest recorded each enabled dimension, also one that the build
+    // left out. The index then looked complete to each person who got it, and
+    // a search on that dimension printed "no matches" with no message.
+    let corpus = Corpus::new("degraded-not-recorded");
+    add_unresolvable_dimension(corpus.path());
+    map_index::run_with_progress(corpus.path(), map_index::Degraded::Allow, |_| {}).unwrap();
+
+    let manifest = manifest_of(&corpus);
+    let names: Vec<&String> = manifest.dimensions.keys().collect();
+    assert_eq!(names, ["declaration", "lexical"]);
+
+    let index = map_query::Index::open(corpus.path()).unwrap();
+    assert_eq!(index.unbuilt(), ["descriptive"]);
+    let descriptive = map_query::Query::from([(
+        "descriptive".to_owned(),
+        map_query::QueryTerm::new("refresh token"),
+    )]);
+    let error = index.find(&descriptive, 5).unwrap_err();
+    assert!(
+        matches!(&error, map_query::QueryError::NotBuilt { name, .. } if name == "descriptive"),
+        "got {error}"
+    );
+    // The dimensions that the build did make are not changed by it.
+    assert!(!index.find(&query("refresh token"), 5).unwrap().is_empty());
+
+    // A build that can run the stage records the dimension.
+    let path = corpus.path().join(".map/config.toml");
+    let config = fs::read_to_string(&path).unwrap();
+    fs::write(&path, config.replace("no-such-classifier", "structural")).unwrap();
+    assert!(map_index::refresh(corpus.path()).unwrap().is_some());
+    let index = map_query::Index::open(corpus.path()).unwrap();
+    assert!(index.unbuilt().is_empty());
+    assert!(!index.find(&descriptive, 5).unwrap().is_empty());
+}
+
+/// Needs the potion weights on disk; never runs in CI, which builds default
+/// features only.
+#[test]
+#[cfg(feature = "distilled")]
+fn a_dimension_with_no_classifier_gets_no_tensor_of_the_raw_text() {
+    // The embedder encodes the segment text when it gets no descriptor. With
+    // the classifier missing and the embedder there, the build wrote such
+    // tensors for the dimension, and a search on it gave hits with usual
+    // scores from data that its description does not describe.
+    let corpus = Corpus::new("degraded-raw-text");
+    let path = corpus.path().join(".map/config.toml");
+    let mut toml = fs::read_to_string(&path).unwrap();
+    toml.push_str(
+        "\n[dimensions.semantic]\n\
+         description = \"content resembling your target\"\n\
+         embedder = { impl = \"distilled\" }\n\
+         \n[dimensions.descriptive]\n\
+         description = \"what the code does\"\n\
+         classifier = { impl = \"no-such-classifier\", prompts = { \"0\" = \"p\" } }\n\
+         embedder = { impl = \"distilled\" }\n",
+    );
+    fs::write(&path, toml).unwrap();
+
+    let stats =
+        map_index::run_with_progress(corpus.path(), map_index::Degraded::Allow, |_| {}).unwrap();
+    assert_eq!(stats.degraded.len(), 1, "{:?}", stats.degraded);
+    assert!(stats.embed_calls > 0, "the embedder must have run");
+
+    let manifest = manifest_of(&corpus);
+    assert!(manifest.dimensions.contains_key("semantic"));
+    assert!(!manifest.dimensions.contains_key("descriptive"));
+
+    // No tensor object names the omitted dimension.
+    let tensors: Vec<Vec<u8>> = object_bytes(corpus.path())
+        .into_iter()
+        .filter(|(p, _)| p.starts_with(Path::new(".map/index").join("tensor")))
+        .map(|(_, bytes)| bytes)
+        .collect();
+    assert!(!tensors.is_empty());
+    for bytes in &tensors {
+        let payload = map_core::decode_tensor_payload(bytes).unwrap();
+        assert_eq!(payload.dimensions, ["semantic"]);
+    }
+
+    let index = map_query::Index::open(corpus.path()).unwrap();
+    let ask = |name: &str| {
+        index.find(
+            &map_query::Query::from([(
+                name.to_owned(),
+                map_query::QueryTerm::new("refresh an access token"),
+            )]),
+            5,
+        )
+    };
+    assert!(!ask("semantic").unwrap().is_empty());
+    assert!(matches!(
+        ask("descriptive"),
+        Err(map_query::QueryError::NotBuilt { .. })
+    ));
+}
+
+#[test]
 fn the_zero_config_index_is_never_degraded() {
     // The first-run promise: no key, no network, no model, and nothing to ask
     // about. If this ever prompts or refuses, the default experience is broken.

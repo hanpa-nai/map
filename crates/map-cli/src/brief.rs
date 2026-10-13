@@ -15,6 +15,7 @@
 //!   context (spec §8). They are flattened to one line, cut to a fixed length,
 //!   stripped of control characters, and labelled as data.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use map_format::Config;
@@ -34,6 +35,10 @@ pub(crate) struct Dimension {
     pub searchable: bool,
     /// Whether building or updating it calls an LLM.
     pub calls_llm: bool,
+    /// Whether the manifest records it. The configuration says what to
+    /// build, and a dimension that was enabled after the last build, or that
+    /// a build omitted, is in the configuration and not in the index.
+    pub built: bool,
 }
 
 /// Whether the index agrees with the files on disk.
@@ -85,8 +90,15 @@ pub(crate) fn run(path: &Path) -> Result<Option<String>, String> {
     // markers as "index replaced", and the advice for a stale index is `-u`,
     // which stops on this file. A scan of the bytes and no parse, because
     // this runs at the start of every session.
-    let conflict = std::fs::read(&manifest_path)
-        .is_ok_and(|bytes| map_format::manifest::has_conflict_markers(&bytes));
+    let manifest = std::fs::read(&manifest_path).ok();
+    let conflict = manifest
+        .as_deref()
+        .is_some_and(map_format::manifest::has_conflict_markers);
+    // The names and nothing else: this runs at the start of every session,
+    // and the full parse costs eight times as much for the same answer.
+    let built = manifest
+        .as_deref()
+        .and_then(map_format::manifest::dimension_names);
     // Best-effort, exactly as on the query path: failing to compute drift must
     // not turn a readable index into an error.
     let state = match map_index::stale(&root) {
@@ -96,14 +108,18 @@ pub(crate) fn run(path: &Path) -> Result<Option<String>, String> {
         _ => State::Unknown,
     };
 
-    Ok(Some(render(&facts(&config, state))))
+    Ok(Some(render(&facts(&config, state, built.as_ref()))))
 }
 
-fn facts(config: &Config, state: State) -> Facts {
+/// `built` is the set of dimensions that the manifest records. `None` is a
+/// manifest that does not read, and then each dimension counts as built: the
+/// search gives the cause, and a guess here would hide a dimension.
+fn facts(config: &Config, state: State, built: Option<&BTreeSet<String>>) -> Facts {
     let dimensions = config
         .active()
         .map(|(name, dimension)| Dimension {
             name: name.clone(),
+            built: built.is_none_or(|names| names.contains(name)),
             description: dimension.description.clone(),
             // The model files are part of the answer: the plugin without
             // them encodes nothing, and the query stops with an error.
@@ -174,11 +190,23 @@ pub(crate) fn render(facts: &Facts) -> String {
     );
     line("");
 
-    let searchable: Vec<&Dimension> = facts.dimensions.iter().filter(|d| d.searchable).collect();
+    let searchable: Vec<&Dimension> = facts
+        .dimensions
+        .iter()
+        .filter(|d| d.searchable && d.built)
+        .collect();
     let unavailable: Vec<String> = facts
         .dimensions
         .iter()
         .filter(|d| !d.searchable)
+        .map(|d| format!("`{}`", d.name))
+        .collect();
+    // Only the ones that this binary can search: for the others, the line
+    // above already says that no query on them runs here.
+    let not_built: Vec<String> = facts
+        .dimensions
+        .iter()
+        .filter(|d| d.searchable && !d.built)
         .map(|d| format!("`{}`", d.name))
         .collect();
 
@@ -198,6 +226,14 @@ pub(crate) fn render(facts: &Facts) -> String {
             "Not available in this binary (the `distilled` feature is necessary)"
         };
         line(&format!("{cause}: {}", unavailable.join(", ")));
+    }
+    // A name and no description: a description here reads as a field to
+    // query, and a query on it is the error that this line is there to stop.
+    if !not_built.is_empty() {
+        line(&format!(
+            "Not built in this index (a search on one of them stops with an error): {}",
+            not_built.join(", ")
+        ));
     }
     line("");
 
@@ -268,7 +304,14 @@ pub(crate) fn render(facts: &Facts) -> String {
     } else if facts.state != State::Conflict {
         // Not with a conflict: `-u` stops on the manifest, and the repair
         // line above is the whole advice.
-        line("Update: `map find -u` has no cost for this index. Use `-u` on the first search after you change files. Do not use `--degraded allow`.");
+        let when = if not_built.is_empty() {
+            "Use `-u` on the first search after you change files."
+        } else {
+            "Use `-u` on the next search: it builds the dimensions that are not built."
+        };
+        line(&format!(
+            "Update: `map find -u` has no cost for this index. {when} Do not use `--degraded allow`."
+        ));
     }
     out
 }
@@ -302,6 +345,7 @@ mod tests {
             description: description.to_owned(),
             searchable: true,
             calls_llm: false,
+            built: true,
         }
     }
 
@@ -374,6 +418,74 @@ path = \"C:/nowhere\"
         assert!(!text.contains("semantic=<text>"));
         assert!(text.contains("Not available in this binary"));
         assert!(text.contains(": `semantic`"));
+    }
+
+    #[test]
+    fn a_dimension_that_the_index_was_built_without_is_not_a_query_field() {
+        // `map find` stops on such a dimension. A briefing that lists it with
+        // its description, or uses it in the example, sends the model to that
+        // error on its first search.
+        let mut absent = dimension("api", "the public interface");
+        absent.built = false;
+        let text = render(&facts_with(vec![absent, dimension("lexical", "words")]));
+
+        assert!(text.contains("map find -d 'lexical=<text>' -n 5 --snippet"));
+        assert!(!text.contains("api=<text>"), "{text}");
+        assert!(!text.contains("the public interface"), "{text}");
+        assert!(text.contains(
+            "Not built in this index (a search on one of them stops with an error): `api`"
+        ));
+        // No stage is missing and no LLM is called, so the repair is free.
+        assert!(text.contains("it builds the dimensions that are not built"));
+    }
+
+    #[test]
+    fn a_dimension_that_is_not_built_does_not_make_an_llm_update_free() {
+        let mut paid = dimension("descriptive", "a description");
+        paid.calls_llm = true;
+        paid.built = false;
+        let text = render(&facts_with(vec![dimension("lexical", "words"), paid]));
+
+        assert!(text.contains("Not built in this index"));
+        assert!(text.contains("do not use `-u` or `map index` unless the user gives approval"));
+        assert!(!text.contains("has no cost"), "{text}");
+    }
+
+    #[test]
+    fn a_dimension_that_this_binary_cannot_search_is_named_one_time() {
+        // Not built, and not searchable here: the "not available" line and
+        // the update line already say all that this binary can do about it.
+        let mut dense = dimension("semantic", "content");
+        dense.searchable = false;
+        dense.built = false;
+        let text = render(&facts_with(vec![dimension("lexical", "words"), dense]));
+
+        assert!(text.contains("Not available in this binary"));
+        assert!(!text.contains("Not built in this index"), "{text}");
+        assert!(text.contains("this binary cannot update this index"));
+    }
+
+    #[test]
+    fn a_dimension_enabled_after_the_build_is_briefed_as_not_built() {
+        // The whole path: the names come from the manifest on disk.
+        let dir = TempDir::new("not-built");
+        crate::init::run(&dir.0, false).unwrap();
+        let before = run(&dir.0).unwrap().unwrap();
+        assert!(!before.contains("Not built in this index"), "{before}");
+
+        let path = dir.0.join(".map").join("config.toml");
+        let mut toml = std::fs::read_to_string(&path).unwrap();
+        toml.push_str(
+            "\n[dimensions.notes]\n\
+             description = \"a second structural dimension\"\n\
+             classifier = { impl = \"structural\" }\n",
+        );
+        std::fs::write(&path, toml).unwrap();
+
+        let text = run(&dir.0).unwrap().unwrap();
+        assert!(text.contains("stops with an error): `notes`"), "{text}");
+        assert!(!text.contains("  `notes`:"), "{text}");
+        assert!(text.contains("  `lexical`:"), "{text}");
     }
 
     #[test]

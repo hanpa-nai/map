@@ -49,6 +49,11 @@ pub enum Degraded<'a> {
     /// consent.
     Abort,
     /// Build the dimensions that do resolve and omit the rest.
+    ///
+    /// The manifest does not record an omitted dimension, and the run writes
+    /// no tensor for it. Thus the index says what it does not have: a search
+    /// on that dimension stops with an error, for each person who gets the
+    /// index and not only for the one who gave the consent.
     Allow,
     /// Ask, and build only if the answer is yes. Called at most once, after the
     /// stages resolve and before any resource is read.
