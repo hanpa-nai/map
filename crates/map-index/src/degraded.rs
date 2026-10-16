@@ -106,6 +106,41 @@ pub(crate) fn unresolved(
     out
 }
 
+/// Whether this binary has a classifier with this name.
+///
+/// A question about the binary and nothing else: it reads no file and loads
+/// no stage. It is for a caller that says what a build can do without a
+/// build, such as `map brief`. For `llm` it does not say that a connection
+/// is configured.
+pub fn classifier_compiled(implementation: &str) -> bool {
+    let always = matches!(implementation, "structural" | "content" | "declaration");
+    always || (implementation == "llm" && cfg!(feature = "llm"))
+}
+
+/// Whether a run with no terminal can use the classifier with this name.
+///
+/// [`classifier_compiled`], and for `llm` also a saved connection: with the
+/// classifier in the binary and no connection, such a run stops on that
+/// stage. It reads one small file at most. It makes no call, and it never
+/// asks on the terminal.
+pub fn classifier_available(implementation: &str) -> bool {
+    available_with(implementation, llm_connection_saved)
+}
+
+fn available_with(implementation: &str, connection_saved: impl FnOnce() -> bool) -> bool {
+    classifier_compiled(implementation) && (implementation != "llm" || connection_saved())
+}
+
+#[cfg(feature = "llm")]
+fn llm_connection_saved() -> bool {
+    map_llm::Connection::load().is_some()
+}
+
+#[cfg(not(feature = "llm"))]
+fn llm_connection_saved() -> bool {
+    false
+}
+
 /// Separate "this build lacks the plugin" from "the plugin is not set up",
 /// because the fix is completely different and the operator cannot tell from
 /// the outside which one they hit.
@@ -230,6 +265,42 @@ embedder = { impl = "distilled" }
             false,
         );
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_classifier_name_is_compiled_exactly_when_its_remedy_is_not_about_the_binary() {
+        // Two answers to one question: `map brief` asks before a build, and
+        // the remedy text answers after one. If they disagree, the briefing
+        // offers an update that the build then refuses.
+        for name in [
+            "structural",
+            "content",
+            "declaration",
+            "llm",
+            "chat-completions",
+        ] {
+            let remedy = classifier_remedy(name);
+            let about_the_binary =
+                remedy.contains("not compiled in") || remedy.contains("no classifier named");
+            assert_eq!(
+                classifier_compiled(name),
+                !about_the_binary,
+                "{name}: {remedy}"
+            );
+        }
+        assert_eq!(classifier_compiled("llm"), cfg!(feature = "llm"));
+    }
+
+    #[test]
+    fn an_llm_classifier_with_no_saved_connection_is_not_available() {
+        // The binary has the classifier, and the run still stops on it. A
+        // caller that offers an update there offers an error.
+        for name in ["structural", "content", "declaration"] {
+            assert!(available_with(name, || false), "{name} needs no connection");
+        }
+        assert!(!available_with("llm", || false));
+        assert_eq!(available_with("llm", || true), cfg!(feature = "llm"));
+        assert!(!available_with("chat-completions", || true));
     }
 
     #[test]

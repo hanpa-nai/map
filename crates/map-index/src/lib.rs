@@ -838,14 +838,28 @@ fn resolve_llm_adapter(
     if !wants {
         return Ok(None);
     }
-    let adapter =
-        std::sync::Arc::new(
-            map_llm::LlmAdapter::load_or_prompt().map_err(|e| IndexError::Io {
-                path: std::path::PathBuf::from("<llm-adapter>"),
-                source: std::io::Error::other(e.to_string()),
-            })?,
-        );
-    Ok(Some(adapter))
+    loaded_adapter(map_llm::LlmAdapter::load_or_prompt())
+}
+
+/// What a load of the connection means for the run.
+///
+/// No connection, and no terminal to ask on, is a stage that did not resolve
+/// and not a failed run: the degraded check reports it with its remedy, and
+/// the policy decides. As an error here it stopped the run before that check,
+/// so `--degraded allow` could not build an index for a dimension whose
+/// endpoint is not there yet, which is the case that the flag is for.
+#[cfg(feature = "llm")]
+fn loaded_adapter(
+    loaded: Result<map_llm::LlmAdapter, map_llm::LlmError>,
+) -> Result<Option<std::sync::Arc<map_llm::LlmAdapter>>, IndexError> {
+    match loaded {
+        Ok(adapter) => Ok(Some(std::sync::Arc::new(adapter))),
+        Err(map_llm::LlmError::NotConfigured) => Ok(None),
+        Err(e) => Err(IndexError::Io {
+            path: std::path::PathBuf::from("<llm-adapter>"),
+            source: std::io::Error::other(e.to_string()),
+        }),
+    }
 }
 
 /// Build the configured segmenter.
@@ -1565,6 +1579,29 @@ mod tests {
             fab_fingerprint(Fingerprint::of(b"before"), "descriptive", "fab"),
             fab_fingerprint(Fingerprint::of(b"after"), "descriptive", "fab"),
         );
+    }
+
+    #[test]
+    #[cfg(feature = "llm")]
+    fn a_missing_llm_connection_is_a_stage_that_did_not_resolve() {
+        // As an error, it stopped the run before the degraded check. A run
+        // with no terminal could then not build without the `llm` dimension,
+        // not with `--degraded allow` either.
+        let none = loaded_adapter(Err(map_llm::LlmError::NotConfigured));
+        assert!(matches!(none, Ok(None)), "the degraded check must see it");
+
+        // Any other failure is still a failure of the run.
+        let failed = loaded_adapter(Err(map_llm::LlmError::Request("refused".to_owned())));
+        assert!(matches!(failed, Err(IndexError::Io { .. })));
+
+        let connection = map_llm::Connection {
+            endpoint: "http://localhost:1/v1".to_owned(),
+            model: "m".to_owned(),
+            api_key: None,
+            protocol: map_llm::Protocol::default(),
+        };
+        let loaded = loaded_adapter(Ok(map_llm::LlmAdapter::new(connection)));
+        assert!(matches!(loaded, Ok(Some(_))));
     }
 
     /// Two `llm` dimensions, whose stage settings the caller supplies.

@@ -35,6 +35,11 @@ pub(crate) struct Dimension {
     pub searchable: bool,
     /// Whether building or updating it calls an LLM.
     pub calls_llm: bool,
+    /// Whether this binary can run the classifier that the dimension names.
+    /// A search does not use the classifier, but an update does. An update
+    /// stops when the binary has no classifier with that name, and when the
+    /// `llm` classifier has no saved connection.
+    pub classifier_available: bool,
     /// Whether the manifest records it. The configuration says what to
     /// build, and a dimension that was enabled after the last build, or that
     /// a build omitted, is in the configuration and not in the index.
@@ -131,6 +136,10 @@ fn facts(config: &Config, state: State, built: Option<&BTreeSet<String>>) -> Fac
                 .classifier
                 .as_ref()
                 .is_some_and(|c| c.implementation == "llm"),
+            classifier_available: dimension
+                .classifier
+                .as_ref()
+                .is_none_or(|c| map_index::degraded::classifier_available(&c.implementation)),
         })
         .collect();
     Facts {
@@ -199,6 +208,15 @@ pub(crate) fn render(facts: &Facts) -> String {
         .dimensions
         .iter()
         .filter(|d| !d.searchable)
+        .map(|d| format!("`{}`", d.name))
+        .collect();
+    // An update runs each stage of each dimension. Not only the embedder:
+    // with a classifier name that this binary does not have, the line below
+    // said that `-u` has no cost, and `-u` then stopped on that stage.
+    let cannot_build: Vec<String> = facts
+        .dimensions
+        .iter()
+        .filter(|d| !d.searchable || !d.classifier_available)
         .map(|d| format!("`{}`", d.name))
         .collect();
     // Only the ones that this binary can search: for the others, the line
@@ -287,31 +305,46 @@ pub(crate) fn render(facts: &Facts) -> String {
         .filter(|d| d.calls_llm)
         .map(|d| format!("`{}`", d.name))
         .collect();
-    // Checked in this order because the first is the only one that spends
-    // money. The last sentence of each branch is there for what the refusal
-    // message suggests: a model that reads "pass --degraded=allow" will, and
-    // that rewrites a committed index with dimensions missing.
-    if !paid.is_empty() {
-        line(&format!(
-            "Update: do not use `-u` or `map index` unless the user gives approval. These dimensions call an LLM, and each call has a cost: {}",
-            paid.join(", ")
-        ));
-    } else if !unavailable.is_empty() {
+    // First, because an update that stops on a stage reads no file and
+    // calls no LLM: a caution about a cost that cannot occur makes the model
+    // ask the user about it for nothing. The last sentence of each branch is
+    // there for what the refusal message suggests: a model that reads "pass
+    // --degraded=allow" will, and that rewrites a committed index with
+    // dimensions missing.
+    if !cannot_build.is_empty() {
         line(&format!(
             "Update: this binary cannot update this index, because it cannot run a stage of these dimensions: {}. Do not use `--degraded allow`.",
-            unavailable.join(", ")
+            cannot_build.join(", ")
         ));
-    } else if facts.state != State::Conflict {
-        // Not with a conflict: `-u` stops on the manifest, and the repair
-        // line above is the whole advice.
+    } else if facts.state == State::Conflict {
+        // No update advice with a conflict: `-u` stops on the manifest, and
+        // the repair line above is the whole advice. That repair runs
+        // `map index`, so the caution about its cost stays.
+        if !paid.is_empty() {
+            line(&format!(
+                "Caution: `map index` uses the `llm` classifier for these dimensions, and that can cost money: {}",
+                paid.join(", ")
+            ));
+        }
+    } else {
         let when = if not_built.is_empty() {
             "Use `-u` on the first search after you change files."
         } else {
             "Use `-u` on the next search: it builds the dimensions that are not built."
         };
-        line(&format!(
-            "Update: `map find -u` has no cost for this index. {when} Do not use `--degraded allow`."
-        ));
+        // A caution and not a prohibition: the person who configured the
+        // dimension accepted that it has a cost. What the model needs is to
+        // know that the cost is there when it decides to update.
+        if paid.is_empty() {
+            line(&format!(
+                "Update: `map find -u` has no cost for this index. {when} Do not use `--degraded allow`."
+            ));
+        } else {
+            line(&format!(
+                "Update: {when} Caution: an update uses the `llm` classifier for these dimensions, and that can cost money: {}. Do not use `--degraded allow`.",
+                paid.join(", ")
+            ));
+        }
     }
     out
 }
@@ -345,6 +378,7 @@ mod tests {
             description: description.to_owned(),
             searchable: true,
             calls_llm: false,
+            classifier_available: true,
             built: true,
         }
     }
@@ -447,7 +481,11 @@ path = \"C:/nowhere\"
         let text = render(&facts_with(vec![dimension("lexical", "words"), paid]));
 
         assert!(text.contains("Not built in this index"));
-        assert!(text.contains("do not use `-u` or `map index` unless the user gives approval"));
+        assert!(text.contains("it builds the dimensions that are not built"));
+        assert!(
+            text.contains("that can cost money: `descriptive`."),
+            "{text}"
+        );
         assert!(!text.contains("has no cost"), "{text}");
     }
 
@@ -463,6 +501,63 @@ path = \"C:/nowhere\"
         assert!(text.contains("Not available in this binary"));
         assert!(!text.contains("Not built in this index"), "{text}");
         assert!(text.contains("this binary cannot update this index"));
+    }
+
+    #[test]
+    fn a_classifier_that_this_binary_does_not_have_is_not_offered_an_update() {
+        // The search needs no classifier, so the dimension stays a query
+        // field when it is built. The update needs it: `-u` stops on the
+        // stage, and "has no cost" sends the model to that error.
+        let mut built = dimension("api", "the public interface");
+        built.classifier_available = false;
+        let text = render(&facts_with(vec![built, dimension("lexical", "words")]));
+        assert!(text.contains("  `api`: the public interface"), "{text}");
+        assert!(text.contains(
+            "this binary cannot update this index, because it cannot run a stage of these dimensions: `api`."
+        ));
+        assert!(!text.contains("has no cost"), "{text}");
+
+        let mut absent = dimension("api", "the public interface");
+        absent.classifier_available = false;
+        absent.built = false;
+        let text = render(&facts_with(vec![absent, dimension("lexical", "words")]));
+        assert!(text.contains("Not built in this index"), "{text}");
+        assert!(text.contains("this binary cannot update this index"));
+        assert!(!text.contains("it builds the dimensions"), "{text}");
+    }
+
+    #[test]
+    fn the_classifier_names_of_the_configuration_decide_the_update_rule() {
+        // The whole path, from `config.toml` text to the update line.
+        let config = |classifier: &str| {
+            Config::parse(&format!(
+                "version = 1\n\
+                 [dimensions.lexical]\n\
+                 description = \"words\"\n\
+                 classifier = {{ impl = \"structural\" }}\n\
+                 [dimensions.notes]\n\
+                 description = \"notes\"\n\
+                 classifier = {{ impl = \"{classifier}\" }}\n"
+            ))
+            .unwrap()
+        };
+        let compiled = |classifier: &str| {
+            let facts = facts(&config(classifier), State::Current, None);
+            let notes = facts.dimensions.iter().find(|d| d.name == "notes").unwrap();
+            (notes.classifier_available, render(&facts))
+        };
+
+        let (known, text) = compiled("content");
+        assert!(known);
+        assert!(text.contains("has no cost"), "{text}");
+
+        let (known, text) = compiled("no-such-classifier");
+        assert!(!known);
+        assert!(
+            text.contains("this binary cannot update this index"),
+            "{text}"
+        );
+        assert!(text.contains("dimensions: `notes`."), "{text}");
     }
 
     #[test]
@@ -489,15 +584,36 @@ path = \"C:/nowhere\"
     }
 
     #[test]
-    fn an_llm_dimension_turns_the_update_advice_into_a_prohibition() {
-        // `-u` on such an index spends the user's money without asking.
+    fn an_llm_dimension_adds_a_caution_to_the_update_advice() {
+        // The update is permitted, and the model knows before it starts one
+        // that the `llm` classifier can cost money. "Has no cost" is false
+        // for this index.
         let mut paid = dimension("descriptive", "a description");
         paid.calls_llm = true;
         let text = render(&facts_with(vec![dimension("lexical", "words"), paid]));
 
-        assert!(text.contains("do not use `-u` or `map index` unless the user gives approval"));
-        assert!(text.contains("cost: `descriptive`"));
-        assert!(!text.contains("has no cost"));
+        assert!(text.contains(
+            "Update: Use `-u` on the first search after you change files. Caution: an update uses the `llm` classifier for these dimensions, and that can cost money: `descriptive`."
+        ), "{text}");
+        assert!(!text.contains("has no cost"), "{text}");
+        assert!(!text.contains("approval"), "{text}");
+        assert_eq!(text.lines().filter(|l| l.starts_with("Update:")).count(), 1);
+    }
+
+    #[test]
+    fn an_llm_dimension_that_this_binary_cannot_run_gets_no_caution() {
+        // No `llm` feature, or no saved connection: the update stops before
+        // it reads a file, so it has no cost to give a caution about.
+        let mut paid = dimension("descriptive", "a description");
+        paid.calls_llm = true;
+        paid.classifier_available = false;
+        let text = render(&facts_with(vec![dimension("lexical", "words"), paid]));
+
+        assert!(text.contains(
+            "this binary cannot update this index, because it cannot run a stage of these dimensions: `descriptive`."
+        ), "{text}");
+        assert!(!text.contains("Caution"), "{text}");
+        assert!(!text.contains("has no cost"), "{text}");
     }
 
     #[test]
@@ -613,7 +729,10 @@ path = \"C:/nowhere\"
         let text = render(&facts);
 
         assert!(text.contains("Repair: if the merge is your task"));
-        assert!(text.contains("do not use `-u` or `map index` unless the user gives approval"));
+        assert!(text.contains(
+            "Caution: `map index` uses the `llm` classifier for these dimensions, and that can cost money: `descriptive`"
+        ), "{text}");
+        assert!(!text.contains("Update:"), "{text}");
     }
 
     #[test]

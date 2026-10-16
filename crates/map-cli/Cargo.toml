@@ -34,10 +34,10 @@ llm = ["map-index/llm", "dep:map-llm"]
 
 [dependencies]
 clap = { version = "4.5.61", features = ["derive"] }
-map-core = { version = "0.0.8", path = "../map-core" }
-map-embed = { version = "0.0.8", path = "../map-embed", optional = true }
-map-format = { version = "0.0.8", path = "../map-format" }
-map-index = { version = "0.0.8", path = "../map-index" }
-map-llm = { version = "0.0.8", path = "../map-llm", optional = true }
-map-query = { version = "0.0.8", path = "../map-query" }
+map-core = { version = "0.0.9", path = "../map-core" }
+map-embed = { version = "0.0.9", path = "../map-embed", optional = true }
+map-format = { version = "0.0.9", path = "../map-format" }
+map-index = { version = "0.0.9", path = "../map-index" }
+map-llm = { version = "0.0.9", path = "../map-llm", optional = true }
+map-query = { version = "0.0.9", path = "../map-query" }
 thiserror = "2.0.19"

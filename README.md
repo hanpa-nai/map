@@ -14,7 +14,7 @@ type of a resource. Discovery reads a directory tree, and the segmenter cuts
 line windows. The prompts and the dimension descriptions of a corpus tell a
 model the type of its material.
 
-> **Status: alpha (`v0.0.8`).** The format on disk is a draft and can change.
+> **Status: alpha (`v0.0.9`).** The format on disk is a draft and can change.
 > See [`spec/format-v1.md`](spec/format-v1.md). MAP is not on crates.io. Build
 > it from source.
 
@@ -311,6 +311,15 @@ in a new directory.
   from such a build keeps the record until the next build. To repair it, run
   `map index` with a binary that can run each stage. `map brief` gives only
   the dimensions of the index as query fields.
+- **From version 0.0.9, `--degraded allow` also omits a dimension that uses
+  the `llm` classifier when no LLM connection is in the user configuration.**
+  With a previous version, a run with no terminal stopped with the error
+  `no LLM connection configured`, and the flag had no effect.
+- **From version 0.0.9, `map brief` gives a caution for an index with an
+  `llm` dimension.** With a previous version, it told the agent not to update
+  that index unless the user gave approval. From this version, the agent can
+  update the index. The caution tells it that the `llm` classifier can cost
+  money.
 - **The git merge driver continues to operate.** The driver command contains
   the path of the binary. If no binary is at that path, MAP writes the path of
   the binary that runs into the git configuration. `map init`, `map index`,
@@ -414,16 +423,29 @@ three update rules:
 
 | index | rule for the agent |
 |---|---|
-| All dimensions are offline, and the binary can run all stages | Use `map find -u` on the first search after an edit. The update has no cost. |
-| A dimension uses the `llm` classifier | Do not update the index unless the user gives approval, because each LLM call has a cost. |
 | The binary cannot run a stage of a dimension | Do not update the index. |
+| All dimensions are offline | Use `map find -u` on the first search after an edit. The update has no cost. |
+| A dimension uses the `llm` classifier | Use `map find -u` on the first search after an edit. Caution: the `llm` classifier can cost money. |
 
-A binary cannot run the embedder stage when it does not have the `distilled`
-feature, or when the model files are not in `~/.map/models`. `map brief`
-examines the two conditions. It does not load the model.
+`map brief` examines the conditions in this sequence. The first rule is first
+because an update that cannot run a stage stops before it reads a file. That
+update makes no LLM call.
 
-When the index does not have a dimension and the first rule applies, the rule
-tells the agent to use `-u` on the next search. That update builds the dimension.
+`map brief` examines these conditions for the first rule. It does not load
+the model, and it makes no LLM call:
+
+- **The embedder.** The binary must have the `distilled` feature, and the
+  model files must be in `~/.map/models`.
+- **The classifier.** The binary must have a classifier with the name that
+  the configuration gives. For the `llm` classifier, the binary must have the
+  `llm` feature, and `~/.map/llm.toml` must contain a connection.
+
+The caution of the third rule does not stop the agent. The agent can update
+the index, and it knows that the update can cost money.
+
+When the binary can build a dimension that the index does not have, the rule
+tells the agent to use `-u` on the next search. That update builds the
+dimension.
 
 An update changes files in `.map/`. Commit those files together with the
 changes to your resources.
@@ -957,7 +979,8 @@ MAP must run each stage that a dimension uses. These conditions are necessary:
 If one condition is not correct, `map index` and `map find -u` **show the stage
 and write no data**.
 
-In an interactive run, MAP shows the problem and you select the action. A run
+In an interactive run, MAP shows the problem and you select the action. If the
+LLM connection is missing, an interactive run first gets it from you. A run
 with no terminal stops. You can build an index without a stage, for example to
 configure a dimension before its endpoint is available. To do that, use
 `--degraded allow`:
