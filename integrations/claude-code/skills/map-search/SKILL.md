@@ -23,9 +23,12 @@ summary is in your context, do not run the command again.
 
 - If the command prints no text, the directory has no index. Use your usual
   search tools.
-- If the shell cannot find `map`, tell the user. The install command is
-  `cargo install --git https://github.com/hanpa-nai/map map-cli --locked`. Do
-  not install it unless the user tells you to.
+- If the shell cannot find `map`, look for a message from the session-start
+  hook in your context. It gives the install command and the directory. Ask
+  the user for the install, and run the command only with their consent. If
+  no such message is in your context, tell the user. The install instructions
+  are at https://github.com/hanpa-nai/map#install. Do not install `map` unless
+  the user tells you to.
 - If the shell shows `unrecognized subcommand 'brief'`, the `map` binary is
   version 0.0.0. Tell the user to run the install command again, with the same
   `--features` as in the first install. You can continue to use `map find`
@@ -108,8 +111,10 @@ for this index. Obey it:
 - **The update has no cost.** Use `map find -u ...` on the first search after
   an edit. Then tell the user that files in `.map/` changed, because the
   repository commits `.map/`.
-- **A dimension calls an LLM.** Do not use `-u` or `map index` unless the user
-  gives approval for the cost.
+- **The update has a caution.** A dimension uses the `llm` classifier, and
+  that classifier can cost money. You can use `map find -u ...` on the first
+  search after an edit. Then tell the user that the update used the LLM and
+  that files in `.map/` changed.
 - **The binary cannot update the index.** Search without `-u`, and tell the
   user that the index is stale.
 

@@ -320,6 +320,11 @@ in a new directory.
   that index unless the user gave approval. From this version, the agent can
   update the index. The caution tells it that the `llm` classifier can cost
   money.
+- **From version 0.0.9, the Claude Code integration finds `map` in the
+  install directories, and it asks for the install when no binary is
+  available.**
+  With a previous version, the hook stopped with "command not found" when
+  `map` was not on `PATH`, and the model got no summary.
 - **The git merge driver continues to operate.** The driver command contains
   the path of the binary. If no binary is at that path, MAP writes the path of
   the binary that runs into the git configuration. `map init`, `map index`,
@@ -388,7 +393,7 @@ integration has two parts:
 - The `map-search` skill tells the model how to write a query, how to read a
   hit, and when it can update the index.
 
-Install `map` first. Then run these commands in Claude Code:
+Run these commands in Claude Code:
 
 ```
 /plugin marketplace add hanpa-nai/map
@@ -398,8 +403,20 @@ Install `map` first. Then run these commands in Claude Code:
 Claude Code 2.1.295 can do the two steps in one terminal command:
 `claude plugin install map --marketplace hanpa-nai/map`.
 
-If `map` is not on `PATH`, the hook stops with a "command not found" error. The
-session continues, but the model does not get the summary.
+The hook finds `map` on `PATH`, or in the directory of the install script, of
+cargo, or of the integration. When the directory is not on `PATH`, the hook
+adds it to the `PATH` of the Bash tool for the session. When no binary is
+available and the repository has an index, the hook tells the model to ask
+you for the install. The model installs nothing without your consent.
+
+With your consent, the model runs the install script with the newest release.
+The script puts `map` in the data directory of the integration,
+`~/.claude/plugins/data/map-map/bin`. That directory stays across updates of
+the integration, and Claude Code deletes it when you uninstall the
+integration.
+
+The hook runs with the `sh` of Git Bash on Windows. On Windows without Git
+Bash, Claude Code runs hooks in PowerShell, and the hook does not run.
 
 ### Other agents
 
